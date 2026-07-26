@@ -162,6 +162,7 @@ dependencies = [
  "arcane-mesh-core",
  "arcane-mesh-node",
  "arcane-mesh-testkit",
+ "blake3",
  "clap",
  "rand_core 0.6.4",
  "serde",

@@ -2,6 +2,7 @@ node_modules/
 target/
 dist/
 .demo/
+.acm/
 .verify/
 .wrangler/
 .astro/

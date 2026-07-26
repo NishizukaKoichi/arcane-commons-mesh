@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod local_vault;
 mod verify;
 
 use anyhow::{bail, Context, Result};
@@ -211,24 +212,15 @@ fn community(command: CommunityCommand) -> Result<()> {
 }
 
 fn vault(command: VaultCommand) -> Result<()> {
+    let passphrase = read_passphrase_stdin()?;
     match command {
-        VaultCommand::Create => status("vault create", "Stronghold identity required"),
-        VaultCommand::Add { path } => {
-            let canonical = fs::canonicalize(path)?;
-            if !canonical.is_file() && !canonical.is_dir() {
-                bail!("vault input is not a file or directory");
-            }
-            println!("validated_path={}", canonical.display());
-            println!("status=ready_for_desktop_confirmation");
-            Ok(())
-        }
-        VaultCommand::List => status("vault list", "no local catalog selected"),
+        VaultCommand::Create => local_vault::create(passphrase.trim_end()),
+        VaultCommand::Add { path } => local_vault::add(&path, passphrase.trim_end()),
+        VaultCommand::List => local_vault::list(passphrase.trim_end()),
         VaultCommand::Restore { file_id, output } => {
-            println!("file_id={file_id}");
-            println!("output={}", output.display());
-            status("vault restore", "catalog and placement selection required")
+            local_vault::restore(&file_id, &output, passphrase.trim_end())
         }
-        VaultCommand::Verify => status("vault verify", "no local catalog selected"),
+        VaultCommand::Verify => local_vault::verify(passphrase.trim_end()),
     }
 }
 
