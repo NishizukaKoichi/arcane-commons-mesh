@@ -2,11 +2,11 @@
 
 use arcane_mesh_core::{
     catalog::{
-        decrypt_and_verify_catalog, encrypt_manifest, sign_and_encrypt_catalog, CatalogFileVersion,
-        FileManifest, VaultCatalog,
+        decrypt_and_verify_catalog, decrypt_manifest, encrypt_manifest, sign_and_encrypt_catalog,
+        CatalogFileVersion, FileManifest, VaultCatalog,
     },
     cid,
-    crypto::SecretKey,
+    crypto::{decrypt, SecretKey},
     identity::Identity,
     recovery::{export, import, RecoveryPayload},
     store::ObjectStore,
@@ -66,6 +66,13 @@ struct DesktopFile {
     safe_replicas: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopRestore {
+    path: String,
+    bytes: u64,
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProviderConfig {
@@ -103,6 +110,29 @@ fn add_vault_file(
     passphrase: String,
 ) -> Result<DesktopFile, String> {
     add_desktop_file(&app, Path::new(&source_path), &passphrase).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_vault_files(app: tauri::AppHandle, passphrase: String) -> Result<Vec<DesktopFile>, String> {
+    list_desktop_files(&app, &passphrase).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn restore_vault_file(
+    app: tauri::AppHandle,
+    file_id: String,
+    passphrase: String,
+) -> Result<DesktopRestore, String> {
+    restore_desktop_file(&app, &file_id, &passphrase).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn delete_vault_file(
+    app: tauri::AppHandle,
+    file_id: String,
+    passphrase: String,
+) -> Result<(), String> {
+    delete_desktop_file(&app, &file_id, &passphrase).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -160,6 +190,9 @@ pub fn run() {
             desktop_status,
             create_recovery_kit,
             add_vault_file,
+            list_vault_files,
+            restore_vault_file,
+            delete_vault_file,
             configure_storage
         ])
         .run(tauri::generate_context!())
@@ -365,6 +398,178 @@ fn add_desktop_file(
         size_bytes: metadata.len(),
         safe_replicas: "3/3".into(),
     })
+}
+
+fn list_desktop_files(
+    app: &tauri::AppHandle,
+    passphrase: &str,
+) -> anyhow::Result<Vec<DesktopFile>> {
+    let data_dir = desktop_data_dir(app)?;
+    let (state, master, catalog) = open_desktop_catalog(&data_dir, passphrase)?;
+    catalog
+        .files
+        .iter()
+        .filter(|version| version.deleted_at.is_none())
+        .map(|version| {
+            let manifest = desktop_manifest(&data_dir, &state, &master, version)?;
+            Ok(DesktopFile {
+                file_id: manifest.file_id,
+                name: manifest.file_name,
+                size_bytes: manifest.plaintext_size,
+                safe_replicas: format!(
+                    "{}/3",
+                    desktop_replica_count(&data_dir, &manifest.ordered_chunk_cids)?
+                ),
+            })
+        })
+        .collect()
+}
+
+fn restore_desktop_file(
+    app: &tauri::AppHandle,
+    file_id: &str,
+    passphrase: &str,
+) -> anyhow::Result<DesktopRestore> {
+    let data_dir = desktop_data_dir(app)?;
+    let (state, master, catalog) = open_desktop_catalog(&data_dir, passphrase)?;
+    let version = catalog
+        .files
+        .iter()
+        .rev()
+        .find(|version| version.file_id == file_id && version.deleted_at.is_none())
+        .ok_or_else(|| anyhow::anyhow!("復元できるファイルがありません"))?;
+    let manifest = desktop_manifest(&data_dir, &state, &master, version)?;
+    let download = app.path().download_dir()?;
+    let output = unique_restored_path(&download, &manifest.file_name);
+    let temporary = output.with_extension("acm-partial");
+    let mut writer = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temporary)?;
+    let file_key = SecretKey(manifest.file_key);
+    let mut hasher = blake3::Hasher::new();
+    for (index, object_cid) in manifest.ordered_chunk_cids.iter().enumerate() {
+        let blob = desktop_restore(&data_dir, object_cid)?;
+        if cid(&blob) != *object_cid {
+            anyhow::bail!("暗号化チャンクのCIDが一致しません");
+        }
+        let envelope = serde_json::from_slice(&blob)?;
+        let aad = format!(
+            "acm.chunk.v1|{}|{}|{}|{}",
+            state.vault_id, version.file_version_id, index, manifest.chunk_plaintext_lengths[index]
+        );
+        let plaintext = Zeroizing::new(decrypt(&file_key, &envelope, aad.as_bytes())?);
+        if plaintext.len() != manifest.chunk_plaintext_lengths[index] as usize {
+            anyhow::bail!("復元チャンク長が一致しません");
+        }
+        hasher.update(&plaintext);
+        writer.write_all(&plaintext)?;
+    }
+    writer.sync_all()?;
+    drop(writer);
+    if hasher.finalize().to_hex().as_str() != manifest.plaintext_hash {
+        fs::remove_file(&temporary)?;
+        anyhow::bail!("復元後の平文ハッシュが一致しません");
+    }
+    fs::rename(&temporary, &output)?;
+    Ok(DesktopRestore {
+        path: output.display().to_string(),
+        bytes: manifest.plaintext_size,
+    })
+}
+
+fn delete_desktop_file(
+    app: &tauri::AppHandle,
+    file_id: &str,
+    passphrase: &str,
+) -> anyhow::Result<()> {
+    let data_dir = desktop_data_dir(app)?;
+    let (mut state, master, mut catalog) = open_desktop_catalog(&data_dir, passphrase)?;
+    let timestamp = unix_now()?;
+    let version = catalog
+        .files
+        .iter_mut()
+        .rev()
+        .find(|version| version.file_id == file_id && version.deleted_at.is_none())
+        .ok_or_else(|| anyhow::anyhow!("削除できるファイルがありません"))?;
+    version.deleted_at = Some(timestamp);
+    version.retention_until = Some(timestamp + 30 * 86400);
+    let (identity_seed, _) = load_stronghold_secrets(&data_dir, passphrase)?;
+    let owner = Identity::from_seed(identity_seed);
+    catalog.previous_catalog_cid = Some(state.catalog_cid);
+    catalog.catalog_version += 1;
+    catalog.created_at = timestamp;
+    state.catalog_cid = desktop_replicate(
+        &data_dir,
+        &serde_json::to_vec(&sign_and_encrypt_catalog(&master, &owner, catalog)?)?,
+        5,
+    )?;
+    state.catalog_version += 1;
+    save_desktop_state(&data_dir, &state)
+}
+
+fn open_desktop_catalog(
+    data_dir: &Path,
+    passphrase: &str,
+) -> anyhow::Result<(DesktopVaultState, SecretKey, VaultCatalog)> {
+    let state = load_desktop_state(data_dir)?;
+    let (_, vault_master_key) = load_stronghold_secrets(data_dir, passphrase)?;
+    let master = SecretKey(vault_master_key);
+    let blob = desktop_restore(data_dir, &state.catalog_cid)?;
+    let catalog = decrypt_and_verify_catalog(
+        &master,
+        &state.vault_id,
+        state.catalog_version,
+        &state.owner_public_key,
+        &serde_json::from_slice(&blob)?,
+    )?
+    .catalog;
+    Ok((state, master, catalog))
+}
+
+fn desktop_manifest(
+    data_dir: &Path,
+    state: &DesktopVaultState,
+    master: &SecretKey,
+    version: &CatalogFileVersion,
+) -> anyhow::Result<FileManifest> {
+    Ok(decrypt_manifest(
+        master,
+        &state.vault_id,
+        &version.file_id,
+        &version.file_version_id,
+        &serde_json::from_slice(&desktop_restore(data_dir, &version.encrypted_manifest_cid)?)?,
+    )?)
+}
+
+fn desktop_replica_count(data_dir: &Path, object_cids: &[String]) -> anyhow::Result<usize> {
+    let nodes = desktop_nodes(data_dir)?;
+    Ok((0..3)
+        .filter(|index| {
+            object_cids
+                .iter()
+                .all(|object_cid| nodes[*index].get(object_cid).is_ok())
+        })
+        .count())
+}
+
+fn unique_restored_path(directory: &Path, file_name: &str) -> PathBuf {
+    let safe_name = Path::new(file_name)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("restored-file");
+    for suffix in 0..10_000 {
+        let name = if suffix == 0 {
+            format!("Restored-{safe_name}")
+        } else {
+            format!("Restored-{suffix}-{safe_name}")
+        };
+        let candidate = directory.join(name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    directory.join(format!("Restored-{}-{safe_name}", std::process::id()))
 }
 
 fn desktop_nodes(data_dir: &Path) -> anyhow::Result<Vec<ObjectStore>> {

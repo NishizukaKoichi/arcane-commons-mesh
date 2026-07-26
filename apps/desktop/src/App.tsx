@@ -61,7 +61,8 @@ export function App() {
   const [files, setFiles] = useState<StoredFile[]>([]);
   const [providerPath, setProviderPath] = useState("");
   const [providerEnabled, setProviderEnabled] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<StoredFile | null>(null);
+  const [notice, setNotice] = useState("");
   const [mobileNav, setMobileNav] = useState(false);
 
   if (!onboarded) {
@@ -141,7 +142,18 @@ export function App() {
               files={files}
               passphrase={sessionPassphrase}
               onAdded={(file) => setFiles((current) => [file, ...current])}
-              onDelete={setDeleteTarget}
+              onDelete={(file) => setDeleteTarget(file)}
+              onRestore={async (file) => {
+                if (!isTauri()) {
+                  setNotice("ブラウザ表示では復元ファイルを書き出しません");
+                  return;
+                }
+                const result = await invoke<{ path: string }>("restore_vault_file", {
+                  fileId: file.fileId,
+                  passphrase: sessionPassphrase
+                });
+                setNotice(`復元先: ${result.path}`);
+              }}
             />
           )}
           {page === "storage" && (
@@ -158,11 +170,22 @@ export function App() {
       </main>
       {deleteTarget && (
         <ConfirmDialog
-          fileName={deleteTarget}
+          fileName={deleteTarget.name}
           onCancel={() => setDeleteTarget(null)}
-          onConfirm={() => setDeleteTarget(null)}
+          onConfirm={async () => {
+            if (isTauri()) {
+              await invoke("delete_vault_file", {
+                fileId: deleteTarget.fileId,
+                passphrase: sessionPassphrase
+              });
+            }
+            setFiles((current) => current.filter((file) => file.fileId !== deleteTarget.fileId));
+            setDeleteTarget(null);
+            setNotice("30日保持の削除予約を記録しました");
+          }}
         />
       )}
+      {notice && <div className="inline-warning" role="status">{notice}</div>}
     </div>
   );
 }
@@ -279,12 +302,14 @@ function Vault({
   files,
   passphrase,
   onAdded,
+  onRestore,
   onDelete
 }: {
   files: StoredFile[];
   passphrase: string;
   onAdded: (file: StoredFile) => void;
-  onDelete: (file: string) => void;
+  onRestore: (file: StoredFile) => Promise<void>;
+  onDelete: (file: StoredFile) => void;
 }) {
   const [sourcePath, setSourcePath] = useState("");
   const [error, setError] = useState("");
@@ -327,7 +352,7 @@ function Vault({
             <span>{file.size}</span>
             <span className={file.copies === "3/3" ? "copy-safe" : "copy-warning"}>{file.copies}</span>
             <span>{file.modified}</span>
-            <button className="icon-button danger" aria-label={`${file.name}を削除`} onClick={() => onDelete(file.name)}><Trash2 size={17} /></button>
+            <span><button className="icon-button" aria-label={`${file.name}を復元`} onClick={() => void onRestore(file)}><ArchiveRestore size={17} /></button><button className="icon-button danger" aria-label={`${file.name}を削除`} onClick={() => onDelete(file)}><Trash2 size={17} /></button></span>
           </div>
         ))}
       </div>
