@@ -401,6 +401,12 @@ impl LocalControlPlane {
         Ok(())
     }
 
+    pub fn catalog_pointer(&self, vault_id: &str) -> Result<&CatalogPointer, ControlError> {
+        self.catalog_pointers
+            .get(vault_id)
+            .ok_or(ControlError::NotFound)
+    }
+
     pub fn record_credit(
         &mut self,
         member_id: &str,
@@ -461,6 +467,10 @@ impl LocalControlPlane {
             .credential
             .verify_member_signature(&vote.signing_bytes(), &vote.member_signature)
             .map_err(|_| ControlError::InvalidSignature)?;
+        let key = (vote.proposal_id.clone(), vote.member_id.clone());
+        if self.votes.contains_key(&key) {
+            return Err(ControlError::State);
+        }
         self.append_audit(
             vote.cast_at,
             "vote_cast",
@@ -468,8 +478,7 @@ impl LocalControlPlane {
             &vote.proposal_id,
         );
         self.vote_history.push(vote.clone());
-        self.votes
-            .insert((vote.proposal_id.clone(), vote.member_id.clone()), vote);
+        self.votes.insert(key, vote);
         Ok(())
     }
 
@@ -679,7 +688,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_vote_updates_one_person_one_vote_and_keeps_history() {
+    fn duplicate_vote_is_rejected() {
         let (mut control, root, founder) = control();
         let bob = Identity::from_seed([3; 32]);
         control
@@ -700,7 +709,10 @@ mod tests {
                 150,
             )
             .unwrap();
-        for (choice, time) in [(VoteChoice::Yes, 170), (VoteChoice::No, 180)] {
+        for (index, (choice, time)) in [(VoteChoice::Yes, 170), (VoteChoice::No, 180)]
+            .into_iter()
+            .enumerate()
+        {
             let mut vote = Vote {
                 proposal_id: "proposal".into(),
                 member_id: bob.member_id(),
@@ -709,12 +721,16 @@ mod tests {
                 member_signature: Vec::new(),
             };
             vote.member_signature = bob.sign(&vote.signing_bytes()).to_vec();
-            control.cast_vote(vote).unwrap();
+            if index == 0 {
+                control.cast_vote(vote).unwrap();
+            } else {
+                assert!(matches!(control.cast_vote(vote), Err(ControlError::State)));
+            }
         }
         let result = control.vote_result("proposal").unwrap();
-        assert_eq!((result.yes, result.no, result.abstain), (0, 1, 0));
+        assert_eq!((result.yes, result.no, result.abstain), (1, 0, 0));
         assert_eq!(result.eligible_members, 2);
-        assert_eq!(control.vote_history_len(), 2);
+        assert_eq!(control.vote_history_len(), 1);
     }
 
     #[test]

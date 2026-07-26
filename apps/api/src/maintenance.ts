@@ -11,10 +11,36 @@ export async function appendAuditEvent(
     occurredAt: number;
   }
 ): Promise<string> {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const prepared = await prepareAuditEvent(db, input);
+    try {
+      await db.batch([prepared.statement]);
+      return prepared.eventHash;
+    } catch {
+      // A concurrent writer may have claimed the sequence. Re-read the head.
+    }
+  }
+  throw new Error("audit_chain_contention");
+}
+
+export async function prepareAuditEvent(
+  db: D1Database,
+  input: {
+    communityId: string;
+    kind: string;
+    actorId: string;
+    subjectId: string;
+    occurredAt: number;
+  }
+): Promise<{ statement: D1PreparedStatement; eventHash: string }> {
   const previous = await db
-    .prepare("SELECT sequence, event_hash FROM audit_events ORDER BY sequence DESC LIMIT 1")
-    .first<{ sequence: number; event_hash: string }>();
-  const sequence = previous ? previous.sequence + 1 : 0;
+    .prepare(
+      `SELECT community_sequence, event_hash FROM audit_events
+       WHERE community_id = ? ORDER BY community_sequence DESC LIMIT 1`
+    )
+    .bind(input.communityId)
+    .first<{ community_sequence: number; event_hash: string }>();
+  const sequence = previous ? previous.community_sequence + 1 : 0;
   const previousHash = previous?.event_hash ?? "0".repeat(64);
   const canonical = [
     "acm.audit-event.v1",
@@ -26,25 +52,26 @@ export async function appendAuditEvent(
     previousHash
   ].join("|");
   const eventHash = bytesToHex(blake3(new TextEncoder().encode(canonical)));
-  await db
-    .prepare(
-      `INSERT INTO audit_events
-       (sequence, community_id, event_kind, actor_id, subject_id,
-        occurred_at, previous_event_hash, event_hash)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .bind(
-      sequence,
-      input.communityId,
-      input.kind,
-      input.actorId,
-      input.subjectId,
-      input.occurredAt,
-      previousHash,
-      eventHash
-    )
-    .run();
-  return eventHash;
+  return {
+    statement: db
+      .prepare(
+        `INSERT INTO audit_events
+         (community_id, community_sequence, event_kind, actor_id, subject_id,
+          occurred_at, previous_event_hash, event_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        input.communityId,
+        sequence,
+        input.kind,
+        input.actorId,
+        input.subjectId,
+        input.occurredAt,
+        previousHash,
+        eventHash
+      ),
+    eventHash
+  };
 }
 
 type PlacementRow = {
@@ -121,7 +148,10 @@ export async function runMaintenance(db: D1Database, now: number): Promise<void>
         `repair:${period}:${row.object_cid}:${row.node_id}`,
         row.node_id,
         row.object_cid,
-        JSON.stringify({ sourceSelection: "healthy-placement" }),
+        JSON.stringify({
+          sourceSelection: "healthy-placement",
+          challenge: crypto.randomUUID()
+        }),
         now,
         now + 6 * 3600
       )
@@ -165,7 +195,7 @@ async function anchorPreviousUtcDay(db: D1Database, now: number): Promise<void> 
       .prepare(
         `SELECT event_hash FROM audit_events
          WHERE community_id = ? AND occurred_at >= ? AND occurred_at < ?
-         ORDER BY sequence`
+         ORDER BY community_sequence`
       )
       .bind(community.community_id, start, end)
       .all<{ event_hash: string }>();

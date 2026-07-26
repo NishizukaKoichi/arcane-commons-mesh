@@ -101,3 +101,14 @@ also require static review, documentation, or local process history.
   root-signed Alice/Bob community and node registry, and cleans all `.demo` state.
   `verify:mvp` sends ciphertext through process IPC and proves process outage and
   corrupted-replica fallback rather than checking process liveness alone.
+- 2026-07-26: final-review repairs unified BLAKE3 CIDs and Rust/Worker canonical
+  membership/node-certificate bytes with shared test vectors; bound storage
+  credit to proof-verified byte length; made D1 audit mutations transactional
+  with per-community chains; persisted network replay state; and added stale-Kit
+  clean recovery for CLI and desktop from explicitly supplied node stores.
+- 2026-07-26: closed final data-loss findings by retaining and re-replicating the
+  complete signed catalog chain across GC/recovery, moving repair into a
+  challenge-bound destination-node task, and adding real desktop backend tests
+  for import, GC, and retained restoration. All acceptance, build, test, audit,
+  demo, and unsigned Tauri gates passed; security, data-loss, and
+  privacy/quality re-reviews reported no remaining CRITICAL/HIGH findings.

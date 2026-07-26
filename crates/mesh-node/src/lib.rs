@@ -89,6 +89,16 @@ impl StorageNode {
             .is_ok_and(|bytes| cid(&bytes) == object_cid))
     }
 
+    pub fn delete(&self, object_cid: &str) -> Result<bool, NodeError> {
+        self.ensure_active()?;
+        Ok(self.store.delete(object_cid)?)
+    }
+
+    pub fn list_cids(&self) -> Result<Vec<String>, NodeError> {
+        self.ensure_active()?;
+        Ok(self.store.list_cids()?)
+    }
+
     fn ensure_active(&self) -> Result<(), NodeError> {
         if self.is_active() {
             Ok(())

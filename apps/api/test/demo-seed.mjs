@@ -1,11 +1,11 @@
 import { generateKeyPairSync, sign } from "node:crypto";
 import { writeFile } from "node:fs/promises";
+import { blake3 } from "@noble/hashes/blake3.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
 
 const baseUrl = "http://127.0.0.1:8787";
 const createdAt = Math.floor(Date.now() / 1000);
 const communityId = `local-demo-${Date.now()}`;
-const aliceMemberId = `alice-${Date.now()}`;
-const bobMemberId = `bob-${Date.now()}`;
 
 function base64Url(bytes) {
   return Buffer.from(bytes).toString("base64url");
@@ -14,6 +14,58 @@ function base64Url(bytes) {
 function rawPublicKey(key) {
   const der = key.export({ type: "spki", format: "der" });
   return base64Url(der.subarray(der.length - 32));
+}
+
+function concat(parts) {
+  return Buffer.concat(parts.map((part) => Buffer.from(part)));
+}
+
+function field(value) {
+  const bytes = typeof value === "string" ? Buffer.from(value) : Buffer.from(value);
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(bytes.length);
+  return concat([length, bytes]);
+}
+
+function unsigned(value, size) {
+  const bytes = Buffer.alloc(size);
+  if (size === 2) bytes.writeUInt16BE(value);
+  else if (size === 4) bytes.writeUInt32BE(value);
+  else bytes.writeBigInt64BE(BigInt(value));
+  return bytes;
+}
+
+function membershipBytes(input) {
+  const roles = [...input.roles].sort();
+  return concat([
+    field("acm.membership.v1"),
+    unsigned(1, 2),
+    field(input.communityId),
+    field(Buffer.from(input.memberPublicKey, "base64url")),
+    field(input.memberId),
+    unsigned(roles.length, 4),
+    ...roles.map(field),
+    unsigned(input.issuedAt, 8),
+    unsigned(input.expiresAt, 8),
+    unsigned(input.serial, 8),
+    field(Buffer.from(input.issuerPublicKey, "base64url"))
+  ]);
+}
+
+function nodeCertificateBytes(input) {
+  return concat([
+    field("acm.node-certificate.v1"),
+    unsigned(1, 2),
+    field(input.nodeId),
+    field(input.communityId),
+    field(input.ownerMemberId),
+    field(input.endpointPublicKey),
+    unsigned(1, 4),
+    field("node"),
+    unsigned(input.maxStorageBytes, 8),
+    unsigned(input.issuedAt, 8),
+    unsigned(input.expiresAt, 8)
+  ]);
 }
 
 async function request(path, init = {}) {
@@ -31,7 +83,15 @@ const bob = generateKeyPairSync("ed25519");
 const rootPublicKey = rawPublicKey(root.publicKey);
 const alicePublicKey = rawPublicKey(alice.publicKey);
 const bobPublicKey = rawPublicKey(bob.publicKey);
+const aliceMemberId = `mem_${bytesToHex(
+  blake3(Buffer.from(alicePublicKey, "base64url"))
+)}`;
+const bobMemberId = `mem_${bytesToHex(
+  blake3(Buffer.from(bobPublicKey, "base64url"))
+)}`;
 const founderRoles = ["admin", "member"];
+const founderCredentialSerial = Date.now();
+const founderCredentialExpiresAt = createdAt + 86400;
 const bootstrapMessage = [
   "acm.community-bootstrap.v1",
   communityId,
@@ -56,6 +116,24 @@ await request("/v1/communities", {
     founderMemberId: aliceMemberId,
     founderPublicKey: alicePublicKey,
     founderRoles,
+    founderCredentialSerial,
+    founderCredentialExpiresAt,
+    founderCredentialSignature: base64Url(
+      sign(
+        null,
+        membershipBytes({
+          communityId,
+          memberPublicKey: alicePublicKey,
+          memberId: aliceMemberId,
+          roles: founderRoles,
+          issuedAt: createdAt,
+          expiresAt: founderCredentialExpiresAt,
+          serial: founderCredentialSerial,
+          issuerPublicKey: rootPublicKey
+        }),
+        root.privateKey
+      )
+    ),
     rootSignature: base64Url(sign(null, Buffer.from(bootstrapMessage), root.privateKey))
   })
 });
@@ -94,17 +172,17 @@ const join = await request(`/v1/communities/${communityId}/join-requests`, {
   body: JSON.stringify({ inviteCode: invite.inviteCode, memberPublicKey: bobPublicKey })
 });
 const bobRoles = ["member"];
-const serial = `demo-${crypto.randomUUID()}`;
-const membershipMessage = [
-  "acm.membership.v1",
+const serial = Date.now() + 1;
+const membershipMessage = membershipBytes({
   communityId,
-  bobMemberId,
-  bobPublicKey,
-  bobRoles.join(","),
+  memberId: bobMemberId,
+  memberPublicKey: bobPublicKey,
+  roles: bobRoles,
   serial,
-  createdAt,
-  createdAt + 86400
-].join("|");
+  issuedAt: createdAt,
+  expiresAt: createdAt + 86400,
+  issuerPublicKey: rootPublicKey
+});
 await request(
   `/v1/communities/${communityId}/join-requests/${join.requestId}/approve`,
   {
@@ -118,7 +196,7 @@ await request(
       issuedAt: createdAt,
       expiresAt: createdAt + 86400,
       rootSignature: base64Url(
-        sign(null, Buffer.from(membershipMessage), root.privateKey)
+        sign(null, membershipMessage, root.privateKey)
       )
     })
   }
@@ -132,17 +210,15 @@ for (const [index, nodeId] of [
 ].entries()) {
   const endpoint = generateKeyPairSync("ed25519");
   const endpointPublicKey = rawPublicKey(endpoint.publicKey);
-  const certificateMessage = [
-    "acm.node-certificate.v1",
+  const certificateMessage = nodeCertificateBytes({
     nodeId,
     communityId,
-    aliceMemberId,
+    ownerMemberId: aliceMemberId,
     endpointPublicKey,
-    "node",
-    67_108_864,
-    createdAt,
-    createdAt + 86400
-  ].join("|");
+    maxStorageBytes: 67_108_864,
+    issuedAt: createdAt,
+    expiresAt: createdAt + 86400
+  });
   await request("/v1/nodes", {
     method: "POST",
     headers: { authorization, "content-type": "application/json" },
@@ -155,7 +231,7 @@ for (const [index, nodeId] of [
       region: "local-demo",
       maxStorageBytes: 67_108_864,
       certificateSignature: base64Url(
-        sign(null, Buffer.from(certificateMessage), alice.privateKey)
+        sign(null, certificateMessage, alice.privateKey)
       ),
       issuedAt: createdAt,
       expiresAt: createdAt + 86400

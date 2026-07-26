@@ -3,18 +3,19 @@
 use arcane_mesh_core::{
     catalog::{
         decrypt_and_verify_catalog, decrypt_manifest, encrypt_manifest, sign_and_encrypt_catalog,
-        CatalogFileVersion, FileManifest, VaultCatalog,
+        CatalogFileVersion, FileManifest, SignedVaultCatalog, VaultCatalog,
     },
     cid,
     crypto::{decrypt, SecretKey},
     identity::Identity,
-    recovery::{export, import, RecoveryPayload},
+    recovery::{export, import, RecoveryPayload, RecoveryVaultPointer},
     store::ObjectStore,
     vault::encrypt_stream_each,
 };
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashSet,
     fs::{self, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -28,14 +29,21 @@ struct DesktopStatus {
     protocol_version: u16,
     chunk_size_bytes: usize,
     secret_store: &'static str,
+    has_vault: bool,
 }
 
 #[tauri::command]
-fn desktop_status() -> DesktopStatus {
+fn desktop_status(app: tauri::AppHandle) -> Result<DesktopStatus, String> {
+    let data_dir = desktop_data_dir(&app).map_err(|error| error.to_string())?;
+    Ok(desktop_status_for_dir(&data_dir))
+}
+
+fn desktop_status_for_dir(data_dir: &Path) -> DesktopStatus {
     DesktopStatus {
         protocol_version: arcane_mesh_core::PROTOCOL_VERSION,
         chunk_size_bytes: arcane_mesh_core::DEFAULT_CHUNK_SIZE,
         secret_store: "stronghold",
+        has_vault: data_dir.join("vault-state.json").is_file(),
     }
 }
 
@@ -64,6 +72,7 @@ struct DesktopFile {
     name: String,
     size_bytes: u64,
     safe_replicas: String,
+    deleted: bool,
 }
 
 #[derive(Serialize)]
@@ -89,6 +98,10 @@ fn create_recovery_kit(
     if passphrase.chars().count() < 12 {
         return Err("復旧パスフレーズは12文字以上にしてください".into());
     }
+    let data_dir = desktop_data_dir(&app).map_err(|error| error.to_string())?;
+    if data_dir.join("vault-state.json").exists() || data_dir.join("owner.stronghold").exists() {
+        return Err("既存の保管庫があります。新規作成では上書きできません".into());
+    }
     let download = app
         .path()
         .download_dir()
@@ -97,10 +110,63 @@ fn create_recovery_kit(
     let bytes = recovery_bytes(&passphrase).map_err(|error| error.to_string())?;
     write_private_new(&path, &bytes).map_err(|error| error.to_string())?;
     initialize_desktop_vault(&app, &path, &passphrase).map_err(|error| error.to_string())?;
+    let state = load_desktop_state(&data_dir).map_err(|error| error.to_string())?;
+    let recovered = import(&bytes, passphrase.as_bytes()).map_err(|error| error.to_string())?;
+    replace_recovery(
+        &path,
+        &RecoveryPayload {
+            identity_seed: recovered.identity_seed,
+            vault_master_key: recovered.vault_master_key,
+            community_ids: recovered.community_ids,
+            control_plane_urls: recovered.control_plane_urls,
+            vaults: vec![RecoveryVaultPointer {
+                vault_id: state.vault_id,
+                catalog_cid: state.catalog_cid,
+                catalog_version: state.catalog_version,
+                owner_public_key: state.owner_public_key,
+            }],
+        },
+        &passphrase,
+    )
+    .map_err(|error| error.to_string())?;
+    let final_bytes = fs::metadata(&path)
+        .map_err(|error| error.to_string())?
+        .len() as usize;
+    Ok(RecoveryExport {
+        path: path.display().to_string(),
+        bytes: final_bytes,
+    })
+}
+
+#[tauri::command]
+fn copy_recovery_kit(app: tauri::AppHandle, passphrase: String) -> Result<RecoveryExport, String> {
+    let data_dir = desktop_data_dir(&app).map_err(|error| error.to_string())?;
+    let state = load_desktop_state(&data_dir).map_err(|error| error.to_string())?;
+    let bytes = fs::read(&state.recovery_path).map_err(|error| error.to_string())?;
+    import(&bytes, passphrase.as_bytes()).map_err(|error| error.to_string())?;
+    let download = app
+        .path()
+        .download_dir()
+        .map_err(|error| error.to_string())?;
+    let path = unique_recovery_path(&download);
+    write_private_new(&path, &bytes).map_err(|error| error.to_string())?;
     Ok(RecoveryExport {
         path: path.display().to_string(),
         bytes: bytes.len(),
     })
+}
+
+#[tauri::command]
+fn import_recovery_kit(
+    app: tauri::AppHandle,
+    recovery_path: String,
+    source_roots: Vec<String>,
+    passphrase: String,
+) -> Result<Vec<DesktopFile>, String> {
+    let roots = source_roots.iter().map(PathBuf::from).collect::<Vec<_>>();
+    import_desktop_recovery(&app, Path::new(&recovery_path), &roots, &passphrase)
+        .map_err(|error| error.to_string())?;
+    list_desktop_files(&app, &passphrase).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -133,6 +199,11 @@ fn delete_vault_file(
     passphrase: String,
 ) -> Result<(), String> {
     delete_desktop_file(&app, &file_id, &passphrase).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn gc_vault(app: tauri::AppHandle, passphrase: String) -> Result<u64, String> {
+    gc_desktop_vault(&app, &passphrase).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -189,10 +260,13 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             desktop_status,
             create_recovery_kit,
+            copy_recovery_kit,
+            import_recovery_kit,
             add_vault_file,
             list_vault_files,
             restore_vault_file,
             delete_vault_file,
+            gc_vault,
             configure_storage
         ])
         .run(tauri::generate_context!())
@@ -210,6 +284,7 @@ fn recovery_bytes(passphrase: &str) -> Result<Vec<u8>, arcane_mesh_core::recover
             vault_master_key,
             community_ids: Vec::new(),
             control_plane_urls: vec!["http://127.0.0.1:8787".into()],
+            vaults: Vec::new(),
         },
         passphrase.as_bytes(),
     )
@@ -244,6 +319,54 @@ fn write_private_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut file = options.open(path)?;
     file.write_all(bytes)?;
     file.sync_all()
+}
+
+fn replace_recovery(
+    path: &Path,
+    payload: &RecoveryPayload,
+    passphrase: &str,
+) -> anyhow::Result<()> {
+    let temporary = path.with_extension("partial");
+    let bytes = export(payload, passphrase.as_bytes())?;
+    let mut options = OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temporary)?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    fs::rename(&temporary, path)?;
+    if let Some(parent) = path.parent() {
+        fs::File::open(parent)?.sync_all()?;
+    }
+    Ok(())
+}
+
+fn refresh_desktop_recovery(
+    state: &DesktopVaultState,
+    identity_seed: [u8; 32],
+    vault_master_key: [u8; 32],
+    passphrase: &str,
+) -> anyhow::Result<()> {
+    replace_recovery(
+        Path::new(&state.recovery_path),
+        &RecoveryPayload {
+            identity_seed,
+            vault_master_key,
+            community_ids: Vec::new(),
+            control_plane_urls: vec!["http://127.0.0.1:8787".into()],
+            vaults: vec![RecoveryVaultPointer {
+                vault_id: state.vault_id.clone(),
+                catalog_cid: state.catalog_cid.clone(),
+                catalog_version: state.catalog_version,
+                owner_public_key: state.owner_public_key,
+            }],
+        },
+        passphrase,
+    )
 }
 
 fn desktop_data_dir(app: &tauri::AppHandle) -> anyhow::Result<PathBuf> {
@@ -291,6 +414,206 @@ fn initialize_desktop_vault(
             owner_public_key: owner.public_key(),
         },
     )
+}
+
+fn import_desktop_recovery(
+    app: &tauri::AppHandle,
+    recovery_path: &Path,
+    source_roots: &[PathBuf],
+    passphrase: &str,
+) -> anyhow::Result<()> {
+    import_desktop_recovery_into(
+        &desktop_data_dir(app)?,
+        recovery_path,
+        source_roots,
+        passphrase,
+    )
+}
+
+fn import_desktop_recovery_into(
+    data_dir: &Path,
+    recovery_path: &Path,
+    source_roots: &[PathBuf],
+    passphrase: &str,
+) -> anyhow::Result<()> {
+    if source_roots.is_empty() {
+        anyhow::bail!("少なくとも一つの保存ノードフォルダが必要です");
+    }
+    if data_dir.join("vault-state.json").exists() || data_dir.join("owner.stronghold").exists() {
+        anyhow::bail!("既存の保管庫があります。復旧で上書きできません");
+    }
+    fs::create_dir_all(data_dir)?;
+    let recovery_bytes = fs::read(recovery_path)?;
+    let recovered = import(&recovery_bytes, passphrase.as_bytes())?;
+    let checkpoint = recovered
+        .vaults
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("復旧ファイルに保管庫チェックポイントがありません"))?;
+    let sources = source_roots
+        .iter()
+        .map(|root| ObjectStore::new(root, u64::MAX).map_err(Into::into))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let master = SecretKey(recovered.vault_master_key);
+    let (catalog_cid, catalog) = discover_desktop_catalog(checkpoint, &master, &sources)?;
+    replicate_desktop_recovered_catalog_chain(
+        data_dir,
+        checkpoint,
+        &master,
+        &sources,
+        &catalog_cid,
+        catalog.catalog.catalog_version,
+    )?;
+    for version in &catalog.catalog.files {
+        let manifest_blob =
+            restore_from_desktop_sources(&sources, &version.encrypted_manifest_cid)?;
+        if desktop_replicate(data_dir, &manifest_blob, 5)? != version.encrypted_manifest_cid {
+            anyhow::bail!("復旧したマニフェストのCIDが一致しません");
+        }
+        let manifest = decrypt_manifest(
+            &master,
+            &checkpoint.vault_id,
+            &version.file_id,
+            &version.file_version_id,
+            &serde_json::from_slice(&manifest_blob)?,
+        )?;
+        for object_cid in manifest.ordered_chunk_cids {
+            let blob = restore_from_desktop_sources(&sources, &object_cid)?;
+            if desktop_replicate(data_dir, &blob, 3)? != object_cid {
+                anyhow::bail!("復旧したチャンクのCIDが一致しません");
+            }
+        }
+    }
+    save_stronghold_secrets(
+        data_dir,
+        passphrase,
+        &recovered.identity_seed,
+        &recovered.vault_master_key,
+    )?;
+    let internal_recovery = data_dir.join("owner.acm-recovery");
+    write_private_new(&internal_recovery, &recovery_bytes)?;
+    let state = DesktopVaultState {
+        format_version: 1,
+        vault_id: checkpoint.vault_id.clone(),
+        recovery_path: internal_recovery.display().to_string(),
+        catalog_cid,
+        catalog_version: catalog.catalog.catalog_version,
+        owner_public_key: checkpoint.owner_public_key,
+    };
+    save_desktop_state(data_dir, &state)?;
+    refresh_desktop_recovery(
+        &state,
+        recovered.identity_seed,
+        recovered.vault_master_key,
+        passphrase,
+    )
+}
+
+fn replicate_desktop_recovered_catalog_chain(
+    data_dir: &Path,
+    checkpoint: &RecoveryVaultPointer,
+    master: &SecretKey,
+    sources: &[ObjectStore],
+    latest_cid: &str,
+    latest_version: u64,
+) -> anyhow::Result<()> {
+    let mut catalog_cid = latest_cid.to_owned();
+    let mut version = latest_version;
+    loop {
+        let blob = restore_from_desktop_sources(sources, &catalog_cid)?;
+        if desktop_replicate(data_dir, &blob, 5)? != catalog_cid {
+            anyhow::bail!("復旧したカタログのCIDが一致しません");
+        }
+        let catalog = decrypt_and_verify_catalog(
+            master,
+            &checkpoint.vault_id,
+            version,
+            &checkpoint.owner_public_key,
+            &serde_json::from_slice(&blob)?,
+        )?;
+        let Some(previous) = catalog.catalog.previous_catalog_cid else {
+            break;
+        };
+        if version <= 1 {
+            anyhow::bail!("カタログ履歴の版番号が不正です");
+        }
+        catalog_cid = previous;
+        version -= 1;
+    }
+    Ok(())
+}
+
+fn restore_from_desktop_sources(
+    sources: &[ObjectStore],
+    object_cid: &str,
+) -> anyhow::Result<Vec<u8>> {
+    for source in sources {
+        if let Ok(bytes) = source.get(object_cid) {
+            return Ok(bytes);
+        }
+    }
+    anyhow::bail!("保存ノードに必要なオブジェクト {object_cid} がありません")
+}
+
+fn discover_desktop_catalog(
+    checkpoint: &RecoveryVaultPointer,
+    master: &SecretKey,
+    sources: &[ObjectStore],
+) -> anyhow::Result<(String, SignedVaultCatalog)> {
+    let checkpoint_blob = restore_from_desktop_sources(sources, &checkpoint.catalog_cid)?;
+    let checkpoint_catalog = decrypt_and_verify_catalog(
+        master,
+        &checkpoint.vault_id,
+        checkpoint.catalog_version,
+        &checkpoint.owner_public_key,
+        &serde_json::from_slice(&checkpoint_blob)?,
+    )?;
+    let mut candidates = std::collections::BTreeMap::new();
+    candidates.insert(
+        checkpoint.catalog_version,
+        (checkpoint.catalog_cid.clone(), checkpoint_catalog),
+    );
+    let mut seen = HashSet::new();
+    for source in sources {
+        for object_cid in source.list_cids()? {
+            if !seen.insert(object_cid.clone()) {
+                continue;
+            }
+            let Ok(blob) = source.get(&object_cid) else {
+                continue;
+            };
+            let Ok(envelope) = serde_json::from_slice(&blob) else {
+                continue;
+            };
+            for version in checkpoint.catalog_version + 1..=checkpoint.catalog_version + 10_000 {
+                if let Ok(catalog) = decrypt_and_verify_catalog(
+                    master,
+                    &checkpoint.vault_id,
+                    version,
+                    &checkpoint.owner_public_key,
+                    &envelope,
+                ) {
+                    candidates.insert(version, (object_cid.clone(), catalog));
+                    break;
+                }
+            }
+        }
+    }
+    let mut version = checkpoint.catalog_version;
+    let mut catalog_cid = checkpoint.catalog_cid.clone();
+    loop {
+        let Some((next_cid, next)) = candidates.get(&(version + 1)) else {
+            break;
+        };
+        if next.catalog.previous_catalog_cid.as_deref() != Some(&catalog_cid) {
+            break;
+        }
+        version += 1;
+        catalog_cid = next_cid.clone();
+    }
+    let (_, catalog) = candidates
+        .remove(&version)
+        .ok_or_else(|| anyhow::anyhow!("検証済みカタログが見つかりません"))?;
+    Ok((catalog_cid, catalog))
 }
 
 fn add_desktop_file(
@@ -392,11 +715,13 @@ fn add_desktop_file(
     )?;
     state.catalog_version += 1;
     save_desktop_state(&data_dir, &state)?;
+    refresh_desktop_recovery(&state, identity_seed, vault_master_key, passphrase)?;
     Ok(DesktopFile {
         file_id,
         name,
         size_bytes: metadata.len(),
         safe_replicas: "3/3".into(),
+        deleted: false,
     })
 }
 
@@ -409,17 +734,27 @@ fn list_desktop_files(
     catalog
         .files
         .iter()
-        .filter(|version| version.deleted_at.is_none())
+        .filter(|version| {
+            version.deleted_at.is_none()
+                || version
+                    .retention_until
+                    .is_some_and(|until| until >= unix_now().unwrap_or(0))
+        })
         .map(|version| {
             let manifest = desktop_manifest(&data_dir, &state, &master, version)?;
             Ok(DesktopFile {
                 file_id: manifest.file_id,
                 name: manifest.file_name,
                 size_bytes: manifest.plaintext_size,
-                safe_replicas: format!(
-                    "{}/3",
-                    desktop_replica_count(&data_dir, &manifest.ordered_chunk_cids)?
-                ),
+                safe_replicas: if version.deleted_at.is_some() {
+                    "削除予約・30日間復元可".into()
+                } else {
+                    format!(
+                        "{}/3",
+                        desktop_replica_count(&data_dir, &manifest.ordered_chunk_cids)?
+                    )
+                },
+                deleted: version.deleted_at.is_some(),
             })
         })
         .collect()
@@ -431,16 +766,39 @@ fn restore_desktop_file(
     passphrase: &str,
 ) -> anyhow::Result<DesktopRestore> {
     let data_dir = desktop_data_dir(app)?;
-    let (state, master, catalog) = open_desktop_catalog(&data_dir, passphrase)?;
+    let (_, _, catalog) = open_desktop_catalog(&data_dir, passphrase)?;
     let version = catalog
         .files
         .iter()
         .rev()
-        .find(|version| version.file_id == file_id && version.deleted_at.is_none())
+        .find(|version| version.file_id == file_id)
         .ok_or_else(|| anyhow::anyhow!("復元できるファイルがありません"))?;
+    let (state, master, _) = open_desktop_catalog(&data_dir, passphrase)?;
     let manifest = desktop_manifest(&data_dir, &state, &master, version)?;
-    let download = app.path().download_dir()?;
-    let output = unique_restored_path(&download, &manifest.file_name);
+    let output = unique_restored_path(&app.path().download_dir()?, &manifest.file_name);
+    restore_desktop_file_to(&data_dir, file_id, passphrase, &output)
+}
+
+fn restore_desktop_file_to(
+    data_dir: &Path,
+    file_id: &str,
+    passphrase: &str,
+    output: &Path,
+) -> anyhow::Result<DesktopRestore> {
+    let (state, master, catalog) = open_desktop_catalog(data_dir, passphrase)?;
+    let version = catalog
+        .files
+        .iter()
+        .rev()
+        .find(|version| {
+            version.file_id == file_id
+                && (version.deleted_at.is_none()
+                    || version
+                        .retention_until
+                        .is_some_and(|until| until >= unix_now().unwrap_or(0)))
+        })
+        .ok_or_else(|| anyhow::anyhow!("復元できるファイルがありません"))?;
+    let manifest = desktop_manifest(data_dir, &state, &master, version)?;
     let temporary = output.with_extension("acm-partial");
     let mut writer = OpenOptions::new()
         .create_new(true)
@@ -449,7 +807,7 @@ fn restore_desktop_file(
     let file_key = SecretKey(manifest.file_key);
     let mut hasher = blake3::Hasher::new();
     for (index, object_cid) in manifest.ordered_chunk_cids.iter().enumerate() {
-        let blob = desktop_restore(&data_dir, object_cid)?;
+        let blob = desktop_restore(data_dir, object_cid)?;
         if cid(&blob) != *object_cid {
             anyhow::bail!("暗号化チャンクのCIDが一致しません");
         }
@@ -471,7 +829,7 @@ fn restore_desktop_file(
         fs::remove_file(&temporary)?;
         anyhow::bail!("復元後の平文ハッシュが一致しません");
     }
-    fs::rename(&temporary, &output)?;
+    fs::rename(&temporary, output)?;
     Ok(DesktopRestore {
         path: output.display().to_string(),
         bytes: manifest.plaintext_size,
@@ -494,7 +852,7 @@ fn delete_desktop_file(
         .ok_or_else(|| anyhow::anyhow!("削除できるファイルがありません"))?;
     version.deleted_at = Some(timestamp);
     version.retention_until = Some(timestamp + 30 * 86400);
-    let (identity_seed, _) = load_stronghold_secrets(&data_dir, passphrase)?;
+    let (identity_seed, vault_master_key) = load_stronghold_secrets(&data_dir, passphrase)?;
     let owner = Identity::from_seed(identity_seed);
     catalog.previous_catalog_cid = Some(state.catalog_cid);
     catalog.catalog_version += 1;
@@ -505,7 +863,59 @@ fn delete_desktop_file(
         5,
     )?;
     state.catalog_version += 1;
-    save_desktop_state(&data_dir, &state)
+    save_desktop_state(&data_dir, &state)?;
+    refresh_desktop_recovery(&state, identity_seed, vault_master_key, passphrase)
+}
+
+fn gc_desktop_vault(app: &tauri::AppHandle, passphrase: &str) -> anyhow::Result<u64> {
+    gc_desktop_vault_in(&desktop_data_dir(app)?, passphrase)
+}
+
+fn gc_desktop_vault_in(data_dir: &Path, passphrase: &str) -> anyhow::Result<u64> {
+    let (mut state, master, mut catalog) = open_desktop_catalog(data_dir, passphrase)?;
+    let (identity_seed, vault_master_key) = load_stronghold_secrets(data_dir, passphrase)?;
+    let owner = Identity::from_seed(identity_seed);
+    let timestamp = unix_now()?;
+    let mut retained_objects = desktop_catalog_chain_cids(data_dir, &state, &master)?;
+    for version in &catalog.files {
+        if version
+            .retention_until
+            .is_none_or(|until| until >= timestamp)
+        {
+            retained_objects.insert(version.encrypted_manifest_cid.clone());
+            retained_objects
+                .extend(desktop_manifest(data_dir, &state, &master, version)?.ordered_chunk_cids);
+        }
+    }
+    let before = catalog.files.len();
+    catalog.files.retain(|version| {
+        version
+            .retention_until
+            .is_none_or(|until| until >= timestamp)
+    });
+    if catalog.files.len() != before {
+        catalog.previous_catalog_cid = Some(state.catalog_cid);
+        catalog.catalog_version += 1;
+        catalog.created_at = timestamp;
+        state.catalog_cid = desktop_replicate(
+            data_dir,
+            &serde_json::to_vec(&sign_and_encrypt_catalog(&master, &owner, catalog)?)?,
+            5,
+        )?;
+        state.catalog_version += 1;
+        save_desktop_state(data_dir, &state)?;
+        refresh_desktop_recovery(&state, identity_seed, vault_master_key, passphrase)?;
+    }
+    retained_objects.extend(desktop_catalog_chain_cids(data_dir, &state, &master)?);
+    let mut removed = 0_u64;
+    for node in desktop_nodes(data_dir)? {
+        for object_cid in node.list_cids()? {
+            if !retained_objects.contains(&object_cid) && node.delete(&object_cid)? {
+                removed += 1;
+            }
+        }
+    }
+    Ok(removed)
 }
 
 fn open_desktop_catalog(
@@ -525,6 +935,38 @@ fn open_desktop_catalog(
     )?
     .catalog;
     Ok((state, master, catalog))
+}
+
+fn desktop_catalog_chain_cids(
+    data_dir: &Path,
+    state: &DesktopVaultState,
+    master: &SecretKey,
+) -> anyhow::Result<HashSet<String>> {
+    let mut retained = HashSet::new();
+    let mut catalog_cid = state.catalog_cid.clone();
+    let mut version = state.catalog_version;
+    loop {
+        if !retained.insert(catalog_cid.clone()) {
+            anyhow::bail!("カタログ履歴に循環があります");
+        }
+        let blob = desktop_restore(data_dir, &catalog_cid)?;
+        let catalog = decrypt_and_verify_catalog(
+            master,
+            &state.vault_id,
+            version,
+            &state.owner_public_key,
+            &serde_json::from_slice(&blob)?,
+        )?;
+        let Some(previous) = catalog.catalog.previous_catalog_cid else {
+            break;
+        };
+        if version <= 1 {
+            anyhow::bail!("カタログ履歴の版番号が不正です");
+        }
+        catalog_cid = previous;
+        version -= 1;
+    }
+    Ok(retained)
 }
 
 fn desktop_manifest(
@@ -619,8 +1061,15 @@ fn load_desktop_state(data_dir: &Path) -> anyhow::Result<DesktopVaultState> {
 fn save_desktop_state(data_dir: &Path, state: &DesktopVaultState) -> anyhow::Result<()> {
     let destination = data_dir.join("vault-state.json");
     let temporary = data_dir.join("vault-state.partial");
-    fs::write(&temporary, serde_json::to_vec_pretty(state)?)?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&temporary)?;
+    file.write_all(&serde_json::to_vec_pretty(state)?)?;
+    file.sync_all()?;
     fs::rename(temporary, destination)?;
+    fs::File::open(data_dir)?.sync_all()?;
     Ok(())
 }
 
@@ -720,10 +1169,12 @@ mod tests {
 
     #[test]
     fn desktop_reports_shared_core_and_stronghold() {
-        let status = desktop_status();
+        let directory = tempfile::tempdir().unwrap();
+        let status = desktop_status_for_dir(directory.path());
         assert_eq!(status.protocol_version, 1);
         assert_eq!(status.chunk_size_bytes, 4 * 1024 * 1024);
         assert_eq!(status.secret_store, "stronghold");
+        assert!(!status.has_vault);
     }
 
     #[test]
@@ -761,5 +1212,233 @@ mod tests {
         assert_eq!(identity, [4; 32]);
         assert_eq!(master, [9; 32]);
         assert!(load_stronghold_secrets(directory.path(), "wrong passphrase").is_err());
+    }
+
+    #[test]
+    fn stale_recovery_checkpoint_discovers_newer_signed_catalog() {
+        let directory = tempfile::tempdir().unwrap();
+        let master = SecretKey([7; 32]);
+        let owner = Identity::from_seed([8; 32]);
+        let vault_id = "vault-recovery-test";
+        let first = serde_json::to_vec(
+            &sign_and_encrypt_catalog(
+                &master,
+                &owner,
+                VaultCatalog {
+                    catalog_version: 1,
+                    vault_id: vault_id.into(),
+                    owner_member_id: owner.member_id(),
+                    previous_catalog_cid: None,
+                    created_at: 100,
+                    files: Vec::new(),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let first_cid = cid(&first);
+        let second = serde_json::to_vec(
+            &sign_and_encrypt_catalog(
+                &master,
+                &owner,
+                VaultCatalog {
+                    catalog_version: 2,
+                    vault_id: vault_id.into(),
+                    owner_member_id: owner.member_id(),
+                    previous_catalog_cid: Some(first_cid.clone()),
+                    created_at: 101,
+                    files: Vec::new(),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let second_cid = cid(&second);
+        let sources = (0..5)
+            .map(|index| {
+                ObjectStore::new(directory.path().join(index.to_string()), 1024 * 1024).unwrap()
+            })
+            .collect::<Vec<_>>();
+        for source in &sources {
+            source.put(&first_cid, &first).unwrap();
+            source.put(&second_cid, &second).unwrap();
+        }
+        let (found_cid, found) = discover_desktop_catalog(
+            &RecoveryVaultPointer {
+                vault_id: vault_id.into(),
+                catalog_cid: first_cid,
+                catalog_version: 1,
+                owner_public_key: owner.public_key(),
+            },
+            &master,
+            &sources,
+        )
+        .unwrap();
+        assert_eq!(found_cid, second_cid);
+        assert_eq!(found.catalog.catalog_version, 2);
+    }
+
+    #[test]
+    fn recovery_import_and_gc_preserve_stale_external_checkpoint() {
+        let directory = tempfile::tempdir().unwrap();
+        let source_root = directory.path().join("sources");
+        let destination = directory.path().join("restored-desktop");
+        let recovery_path = directory.path().join("external.acm-recovery");
+        let passphrase = "correct horse battery staple";
+        let master = SecretKey([17; 32]);
+        let owner = Identity::from_seed([18; 32]);
+        let vault_id = "vault-desktop-recovery";
+        let first = serde_json::to_vec(
+            &sign_and_encrypt_catalog(
+                &master,
+                &owner,
+                VaultCatalog {
+                    catalog_version: 1,
+                    vault_id: vault_id.into(),
+                    owner_member_id: owner.member_id(),
+                    previous_catalog_cid: None,
+                    created_at: 100,
+                    files: Vec::new(),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let first_cid = cid(&first);
+        let second = serde_json::to_vec(
+            &sign_and_encrypt_catalog(
+                &master,
+                &owner,
+                VaultCatalog {
+                    catalog_version: 2,
+                    vault_id: vault_id.into(),
+                    owner_member_id: owner.member_id(),
+                    previous_catalog_cid: Some(first_cid.clone()),
+                    created_at: 101,
+                    files: Vec::new(),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let second_cid = cid(&second);
+        let roots = (0..5)
+            .map(|index| source_root.join(index.to_string()))
+            .collect::<Vec<_>>();
+        for root in &roots {
+            let source = ObjectStore::new(root, 1024 * 1024).unwrap();
+            source.put(&first_cid, &first).unwrap();
+            source.put(&second_cid, &second).unwrap();
+        }
+        let kit = export(
+            &RecoveryPayload {
+                identity_seed: [18; 32],
+                vault_master_key: master.0,
+                community_ids: Vec::new(),
+                control_plane_urls: Vec::new(),
+                vaults: vec![RecoveryVaultPointer {
+                    vault_id: vault_id.into(),
+                    catalog_cid: first_cid.clone(),
+                    catalog_version: 1,
+                    owner_public_key: owner.public_key(),
+                }],
+            },
+            passphrase.as_bytes(),
+        )
+        .unwrap();
+        fs::write(&recovery_path, kit).unwrap();
+
+        import_desktop_recovery_into(&destination, &recovery_path, &roots, passphrase).unwrap();
+        let state = load_desktop_state(&destination).unwrap();
+        assert_eq!(state.catalog_cid, second_cid);
+        assert_eq!(state.catalog_version, 2);
+        gc_desktop_vault_in(&destination, passphrase).unwrap();
+        assert_eq!(desktop_restore(&destination, &first_cid).unwrap(), first);
+    }
+
+    #[test]
+    fn retained_tombstone_restores_plaintext_in_backend() {
+        let directory = tempfile::tempdir().unwrap();
+        let data_dir = directory.path().join("desktop");
+        let output = directory.path().join("restored.txt");
+        let passphrase = "correct horse battery staple";
+        let owner = Identity::from_seed([28; 32]);
+        let master = SecretKey([29; 32]);
+        let file_key = SecretKey([30; 32]);
+        let vault_id = "vault-retained-test";
+        let file_id = "file-retained-test";
+        let file_version_id = "file-retained-test-v1";
+        let plaintext = b"retained desktop recovery";
+        fs::create_dir_all(&data_dir).unwrap();
+        save_stronghold_secrets(&data_dir, passphrase, &[28; 32], &master.0).unwrap();
+        let aad = format!(
+            "acm.chunk.v1|{vault_id}|{file_version_id}|0|{}",
+            plaintext.len()
+        );
+        let chunk_blob = serde_json::to_vec(
+            &arcane_mesh_core::crypto::encrypt(&file_key, plaintext, aad.as_bytes()).unwrap(),
+        )
+        .unwrap();
+        let chunk_cid = desktop_replicate(&data_dir, &chunk_blob, 3).unwrap();
+        let manifest = FileManifest {
+            manifest_version: 1,
+            file_id: file_id.into(),
+            file_version_id: file_version_id.into(),
+            relative_path: ".".into(),
+            file_name: "retained.txt".into(),
+            mime_type: "text/plain".into(),
+            plaintext_size: plaintext.len() as u64,
+            plaintext_hash: blake3::hash(plaintext).to_hex().to_string(),
+            modified_at: 100,
+            created_at: 100,
+            file_key: file_key.0,
+            ordered_chunk_cids: vec![chunk_cid],
+            chunk_plaintext_lengths: vec![plaintext.len() as u32],
+            padding_lengths: vec![0],
+        };
+        let manifest_blob =
+            serde_json::to_vec(&encrypt_manifest(&master, vault_id, &manifest).unwrap()).unwrap();
+        let manifest_cid = desktop_replicate(&data_dir, &manifest_blob, 5).unwrap();
+        let timestamp = unix_now().unwrap();
+        let catalog_blob = serde_json::to_vec(
+            &sign_and_encrypt_catalog(
+                &master,
+                &owner,
+                VaultCatalog {
+                    catalog_version: 1,
+                    vault_id: vault_id.into(),
+                    owner_member_id: owner.member_id(),
+                    previous_catalog_cid: None,
+                    created_at: timestamp,
+                    files: vec![CatalogFileVersion {
+                        file_id: file_id.into(),
+                        file_version_id: file_version_id.into(),
+                        encrypted_manifest_cid: manifest_cid,
+                        created_at: timestamp,
+                        deleted_at: Some(timestamp),
+                        retention_until: Some(timestamp + 3600),
+                    }],
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let catalog_cid = desktop_replicate(&data_dir, &catalog_blob, 5).unwrap();
+        save_desktop_state(
+            &data_dir,
+            &DesktopVaultState {
+                format_version: 1,
+                vault_id: vault_id.into(),
+                recovery_path: data_dir.join("owner.acm-recovery").display().to_string(),
+                catalog_cid,
+                catalog_version: 1,
+                owner_public_key: owner.public_key(),
+            },
+        )
+        .unwrap();
+
+        let restored = restore_desktop_file_to(&data_dir, file_id, passphrase, &output).unwrap();
+        assert_eq!(restored.bytes, plaintext.len() as u64);
+        assert_eq!(fs::read(output).unwrap(), plaintext);
     }
 }

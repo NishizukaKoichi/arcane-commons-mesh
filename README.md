@@ -2,7 +2,7 @@
 
 Arcane Commons Mesh v0.1 is a local, independently verifiable MVP for a
 members-only cooperative backup mesh. It encrypts data before storage, places
-ciphertext on three isolated local storage nodes, restores through an outage,
+ciphertext on three local storage-node processes, restores through an outage,
 rejects corruption, and recovers from an encrypted recovery file.
 
 This is not production-ready, fully decentralized, anonymous, or independently
@@ -62,9 +62,20 @@ printf '%s\n' "$ACM_PASSPHRASE" | cargo run -p arcane-mesh-cli -- vault list
 unset ACM_PASSPHRASE
 ```
 
-Local vault state stays in ignored `.acm/`. Data chunks use three replicas;
+Local vault state stays in ignored `.acm/`. Data chunks use three local replicas;
 encrypted manifests and signed encrypted catalogs use five. Keep the generated
 Recovery Kit somewhere separate from the computer.
+
+To rebuild in a clean directory from an external Kit and mounted/exported node
+stores:
+
+```sh
+printf '%s\n' "$ACM_PASSPHRASE" | cargo run -p arcane-mesh-cli -- \
+  recovery import /Volumes/Backup/owner.acm-recovery \
+  --source /Volumes/Node-A/storage \
+  --source /Volumes/Node-B/storage \
+  --source /Volumes/Node-C/storage
+```
 
 The unsigned local desktop artifact is built with:
 
@@ -74,7 +85,11 @@ pnpm --filter @arcane-commons/desktop tauri build --no-bundle
 
 The current release binary is placed under `target/release/`. Onboarding writes
 an encrypted Recovery Kit to Downloads and stores identity/vault keys in a
-Stronghold snapshot. Real file additions are streamed, encrypted, and replicated.
+Stronghold snapshot. Real file additions are streamed, encrypted, and replicated
+to separate object stores on the same Mac. The desktop labels this as local MVP
+storage: it is not geographic redundancy and does not survive loss of that Mac.
+The onboarding screen can import a Kit from explicitly supplied storage-node
+folders; automatic remote-node discovery is not part of this local artifact.
 It is an unaudited
 development artifact and must not be treated as the only copy of valuable data.
 

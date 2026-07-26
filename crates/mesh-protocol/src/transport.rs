@@ -2,8 +2,7 @@ use crate::{Request, MAX_FRAME_BYTES, PROTOCOL_ID};
 use arcane_mesh_core::identity::NodeCertificate;
 use iroh::{endpoint::presets, Endpoint, EndpointAddr};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
-use std::sync::Mutex;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use thiserror::Error;
 use tokio::time::timeout;
@@ -36,22 +35,26 @@ pub enum TransportError {
 /// Native QUIC transport endpoint for Arcane Commons Mesh.
 ///
 /// `bind_local` is deliberately relay- and discovery-free for deterministic
-/// tests. Production callers may construct an endpoint with `presets::N0` to
-/// enable direct dialing with encrypted relay fallback.
+/// tests. Every constructor requires a durable replay database.
 pub struct IrohTransport {
     endpoint: Endpoint,
-    seen_request_ids: Mutex<BTreeSet<String>>,
+    replay_database: PathBuf,
 }
 
 impl IrohTransport {
-    pub fn from_endpoint(endpoint: Endpoint) -> Self {
-        Self {
+    pub fn from_endpoint(
+        endpoint: Endpoint,
+        replay_database: impl AsRef<Path>,
+    ) -> Result<Self, TransportError> {
+        let transport = Self {
             endpoint,
-            seen_request_ids: Mutex::new(BTreeSet::new()),
-        }
+            replay_database: replay_database.as_ref().to_path_buf(),
+        };
+        transport.initialize_replay_database()?;
+        Ok(transport)
     }
 
-    pub async fn bind_local() -> Result<Self, TransportError> {
+    pub async fn bind_local(replay_database: impl AsRef<Path>) -> Result<Self, TransportError> {
         let endpoint = Endpoint::builder(presets::N0DisableRelay)
             .clear_address_lookup()
             .clear_ip_transports()
@@ -61,23 +64,27 @@ impl IrohTransport {
             .bind()
             .await
             .map_err(|error| TransportError::Iroh(error.to_string()))?;
-        Ok(Self {
+        let transport = Self {
             endpoint,
-            seen_request_ids: Mutex::new(BTreeSet::new()),
-        })
+            replay_database: replay_database.as_ref().to_path_buf(),
+        };
+        transport.initialize_replay_database()?;
+        Ok(transport)
     }
 
     /// Binds the normal iroh endpoint: direct paths are preferred and encrypted
     /// relay transport remains available when direct dialing cannot succeed.
-    pub async fn bind_network() -> Result<Self, TransportError> {
+    pub async fn bind_network(replay_database: impl AsRef<Path>) -> Result<Self, TransportError> {
         let endpoint = Endpoint::bind(presets::N0)
             .await
             .map_err(|error| TransportError::Iroh(error.to_string()))?;
         endpoint.set_alpns(vec![PROTOCOL_ID.as_bytes().to_vec()]);
-        Ok(Self {
+        let transport = Self {
             endpoint,
-            seen_request_ids: Mutex::new(BTreeSet::new()),
-        })
+            replay_database: replay_database.as_ref().to_path_buf(),
+        };
+        transport.initialize_replay_database()?;
+        Ok(transport)
     }
 
     pub fn addr(&self) -> EndpointAddr {
@@ -153,6 +160,14 @@ impl IrohTransport {
                 "request node does not match endpoint certificate".into(),
             ));
         }
+        if frame.node_certificate.claims.owner_member_id
+            != frame.request.credential.claims.member_id
+            || frame.node_owner_public_key != frame.request.credential.claims.member_public_key
+        {
+            return Err(TransportError::Iroh(
+                "node certificate owner does not match membership credential".into(),
+            ));
+        }
         frame
             .request
             .validate(expected_community_root, now, encoded.len())
@@ -166,12 +181,13 @@ impl IrohTransport {
                 &frame.request_signature,
             )
             .map_err(|error| TransportError::Iroh(error.to_string()))?;
-        let inserted = self
-            .seen_request_ids
-            .lock()
-            .map_err(|_| TransportError::Iroh("request replay cache unavailable".into()))?
-            .insert(frame.request.request_id.clone());
-        if !inserted {
+        let replay_key = format!(
+            "{}|{}|{}",
+            frame.request.community_id,
+            frame.request.credential.claims.member_id,
+            frame.request.request_id
+        );
+        if !self.claim_replay(&replay_key, frame.request.expires_at, now)? {
             return Err(TransportError::Iroh("replayed request identifier".into()));
         }
         connection.close(0_u8.into(), b"frame received");
@@ -180,6 +196,53 @@ impl IrohTransport {
 
     pub async fn close(self) {
         self.endpoint.close().await;
+    }
+
+    fn initialize_replay_database(&self) -> Result<(), TransportError> {
+        let path = &self.replay_database;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| TransportError::Iroh(error.to_string()))?;
+        }
+        let connection = rusqlite::Connection::open(path)
+            .map_err(|error| TransportError::Iroh(error.to_string()))?;
+        connection
+            .execute_batch(
+                "PRAGMA journal_mode=WAL;
+                 PRAGMA synchronous=FULL;
+                 CREATE TABLE IF NOT EXISTS replay_requests (
+                   replay_key TEXT PRIMARY KEY NOT NULL,
+                   expires_at INTEGER NOT NULL
+                 );",
+            )
+            .map_err(|error| TransportError::Iroh(error.to_string()))
+    }
+
+    fn claim_replay(
+        &self,
+        replay_key: &str,
+        expires_at: i64,
+        now: i64,
+    ) -> Result<bool, TransportError> {
+        let mut connection = rusqlite::Connection::open(&self.replay_database)
+            .map_err(|error| TransportError::Iroh(error.to_string()))?;
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|error| TransportError::Iroh(error.to_string()))?;
+        transaction
+            .execute("DELETE FROM replay_requests WHERE expires_at < ?1", [now])
+            .map_err(|error| TransportError::Iroh(error.to_string()))?;
+        let inserted = transaction
+            .execute(
+                "INSERT OR IGNORE INTO replay_requests (replay_key, expires_at) VALUES (?1, ?2)",
+                rusqlite::params![replay_key, expires_at],
+            )
+            .map_err(|error| TransportError::Iroh(error.to_string()))?
+            == 1;
+        transaction
+            .commit()
+            .map_err(|error| TransportError::Iroh(error.to_string()))?;
+        Ok(inserted)
     }
 }
 
@@ -219,11 +282,16 @@ mod tests {
 
     #[tokio::test]
     async fn exchanges_an_authenticated_frame_over_offline_loopback_quic() {
-        let server = IrohTransport::bind_local().await.unwrap();
-        let client = IrohTransport::bind_local().await.unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let server = IrohTransport::bind_local(directory.path().join("server.sqlite3"))
+            .await
+            .unwrap();
+        let client = IrohTransport::bind_local(directory.path().join("client.sqlite3"))
+            .await
+            .unwrap();
         let server_addr = server.addr();
         assert!(server_addr.relay_urls().next().is_none());
-        let owner = Identity::from_seed([9; 32]);
+        let owner = Identity::from_seed([2; 32]);
         let certificate = NodeCertificateClaims {
             certificate_version: 1,
             node_id: "node-a".into(),
@@ -261,5 +329,24 @@ mod tests {
 
         server.close().await;
         client.close().await;
+    }
+
+    #[tokio::test]
+    async fn durable_replay_cache_survives_transport_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("replay.sqlite3");
+        let first = IrohTransport::bind_local(&database).await.unwrap();
+        assert!(first
+            .claim_replay("community|member|request", 200, 150)
+            .unwrap());
+        first.close().await;
+        let second = IrohTransport::bind_local(&database).await.unwrap();
+        assert!(!second
+            .claim_replay("community|member|request", 200, 150)
+            .unwrap());
+        assert!(second
+            .claim_replay("community|member|request", 300, 201)
+            .unwrap());
+        second.close().await;
     }
 }

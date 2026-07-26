@@ -88,7 +88,7 @@ pub struct NodeCertificate {
 }
 
 impl MembershipClaims {
-    fn canonical_bytes(&self) -> Vec<u8> {
+    pub fn canonical_bytes(&self) -> Vec<u8> {
         let mut roles = self.roles.clone();
         roles.sort();
         let mut out = Vec::new();
@@ -177,7 +177,7 @@ impl MembershipCredential {
 }
 
 impl NodeCertificateClaims {
-    fn canonical_bytes(&self) -> Vec<u8> {
+    pub fn canonical_bytes(&self) -> Vec<u8> {
         let mut roles = self.allowed_roles.clone();
         roles.sort();
         let mut out = Vec::new();
@@ -251,6 +251,54 @@ fn field(output: &mut Vec<u8>, value: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canonical_encoding_matches_shared_cross_language_fixture() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../packages/protocol-fixtures/canonical-v1.json"
+        ))
+        .unwrap();
+        let claims = MembershipClaims {
+            credential_version: 1,
+            community_id: "community-fixture".into(),
+            member_public_key: [2; 32],
+            member_id: fixture["member_id"].as_str().unwrap().into(),
+            roles: vec!["member".into(), "admin".into()],
+            issued_at: 100,
+            expires_at: 200,
+            serial: 7,
+            issuer_public_key: [1; 32],
+        };
+        let certificate = NodeCertificateClaims {
+            certificate_version: 1,
+            node_id: "node-fixture".into(),
+            community_id: "community-fixture".into(),
+            owner_member_id: claims.member_id.clone(),
+            endpoint_public_key: "endpoint-fixture".into(),
+            allowed_roles: vec!["node".into()],
+            max_storage_bytes: 4096,
+            issued_at: 100,
+            expires_at: 200,
+        };
+        let encode = |bytes: Vec<u8>| {
+            bytes
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        };
+        assert_eq!(
+            encode(claims.canonical_bytes()),
+            fixture["membership_hex"].as_str().unwrap()
+        );
+        assert_eq!(
+            encode(certificate.canonical_bytes()),
+            fixture["node_hex"].as_str().unwrap()
+        );
+        assert_eq!(
+            crate::cid(fixture["object_fixture"].as_str().unwrap().as_bytes()),
+            fixture["object_cid"].as_str().unwrap()
+        );
+    }
 
     fn credential() -> MembershipCredential {
         let root = Identity::from_seed([1; 32]);

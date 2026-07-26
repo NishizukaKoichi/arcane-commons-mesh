@@ -29,6 +29,7 @@ paths:
     post:
       security: []
       operationId: createCommunity
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CommunityBootstrap" } } } }
       responses: { "201": { description: Root-signed community created } }
   /v1/communities/{communityId}:
     get: { operationId: getCommunity, parameters: [{$ref: "#/components/parameters/CommunityId"}], responses: { "200": { description: Community } } }
@@ -38,13 +39,20 @@ paths:
     post: { operationId: createJoinRequest, parameters: [{$ref: "#/components/parameters/CommunityId"}], responses: { "201": { description: Created } } }
     get: { operationId: listJoinRequests, parameters: [{$ref: "#/components/parameters/CommunityId"}], responses: { "200": { description: Requests } } }
   /v1/communities/{communityId}/join-requests/{requestId}/approve:
-    post: { operationId: approveJoinRequest, parameters: [{$ref: "#/components/parameters/CommunityId"}, {$ref: "#/components/parameters/RequestId"}], responses: { "200": { description: Approved } } }
+    post:
+      operationId: approveJoinRequest
+      parameters: [{$ref: "#/components/parameters/CommunityId"}, {$ref: "#/components/parameters/RequestId"}]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/MembershipApproval" } } } }
+      responses: { "200": { description: Approved } }
   /v1/communities/{communityId}/members:
     get: { operationId: listMembers, parameters: [{$ref: "#/components/parameters/CommunityId"}], responses: { "200": { description: Members } } }
   /v1/communities/{communityId}/members/{memberId}/revoke:
     post: { operationId: revokeMember, parameters: [{$ref: "#/components/parameters/CommunityId"}, {$ref: "#/components/parameters/MemberId"}], responses: { "200": { description: Revoked } } }
   /v1/nodes:
-    post: { operationId: registerNode, responses: { "201": { description: Registered } } }
+    post:
+      operationId: registerNode
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/NodeRegistration" } } } }
+      responses: { "201": { description: Registered } }
   /v1/nodes/candidates:
     get: { operationId: listNodeCandidates, responses: { "200": { description: Candidates } } }
   /v1/nodes/{nodeId}:
@@ -59,18 +67,29 @@ paths:
     put: { operationId: updateCatalogPointer, parameters: [{$ref: "#/components/parameters/VaultId"}], responses: { "200": { description: Updated } } }
     get: { operationId: getCatalogPointer, parameters: [{$ref: "#/components/parameters/VaultId"}], responses: { "200": { description: Pointer } } }
   /v1/objects:
-    post: { operationId: registerObject, responses: { "201": { description: Registered } } }
+    post:
+      operationId: registerObject
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ObjectRecord" } } } }
+      responses: { "201": { description: Registered } }
   /v1/objects/{cid}:
     get: { operationId: getObjectMetadata, parameters: [{$ref: "#/components/parameters/Cid"}], responses: { "200": { description: Metadata } } }
   /v1/objects/{cid}/placements:
-    post: { operationId: addPlacement, parameters: [{$ref: "#/components/parameters/Cid"}], responses: { "201": { description: Created } } }
+    post:
+      operationId: addPlacement
+      parameters: [{$ref: "#/components/parameters/Cid"}]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/StorageReceipt" } } } }
+      responses: { "201": { description: Proof-verified placement created } }
     get: { operationId: listPlacements, parameters: [{$ref: "#/components/parameters/Cid"}], responses: { "200": { description: Placements } } }
   /v1/placements/{placementId}/failed:
     post: { operationId: failPlacement, parameters: [{$ref: "#/components/parameters/PlacementId"}], responses: { "200": { description: Failed } } }
   /v1/tasks/{taskId}/accept:
     post: { operationId: acceptTask, parameters: [{$ref: "#/components/parameters/TaskId"}], responses: { "200": { description: Accepted } } }
   /v1/tasks/{taskId}/complete:
-    post: { operationId: completeTask, parameters: [{$ref: "#/components/parameters/TaskId"}], responses: { "200": { description: Completed } } }
+    post:
+      operationId: completeTask
+      parameters: [{$ref: "#/components/parameters/TaskId"}]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TaskProof" } } } }
+      responses: { "200": { description: Proof-verified completion } }
   /v1/tasks/{taskId}/fail:
     post: { operationId: failTask, parameters: [{$ref: "#/components/parameters/TaskId"}], responses: { "200": { description: Failed } } }
   /v1/credits/me:
@@ -110,6 +129,77 @@ components:
       name: x-acm-internal-secret
       description: Local development or Worker cron maintenance authorization only.
   schemas:
+    CommunityBootstrap:
+      type: object
+      additionalProperties: false
+      required: [communityId, name, rootPublicKey, createdAt, policyVersion, founderMemberId, founderPublicKey, founderRoles, founderCredentialSerial, founderCredentialExpiresAt, founderCredentialSignature, rootSignature]
+      properties:
+        communityId: { type: string }
+        name: { type: string }
+        rootPublicKey: { type: string, minLength: 43, maxLength: 43 }
+        createdAt: { type: integer }
+        policyVersion: { type: integer, minimum: 1 }
+        founderMemberId: { type: string, pattern: "^mem_[0-9a-f]{64}$" }
+        founderPublicKey: { type: string, minLength: 43, maxLength: 43 }
+        founderRoles: { type: array, items: { type: string, enum: [member, admin, auditor] } }
+        founderCredentialSerial: { type: integer, minimum: 0 }
+        founderCredentialExpiresAt: { type: integer }
+        founderCredentialSignature: { type: string }
+        rootSignature: { type: string }
+    MembershipApproval:
+      type: object
+      additionalProperties: false
+      required: [memberId, memberPublicKey, roles, serial, issuedAt, expiresAt, rootSignature]
+      properties:
+        memberId: { type: string, pattern: "^mem_[0-9a-f]{64}$" }
+        memberPublicKey: { type: string, minLength: 43, maxLength: 43 }
+        roles: { type: array, items: { type: string, enum: [member, admin, auditor] } }
+        serial: { type: integer, minimum: 0 }
+        issuedAt: { type: integer }
+        expiresAt: { type: integer }
+        rootSignature: { type: string }
+    NodeRegistration:
+      type: object
+      additionalProperties: false
+      required: [nodeId, communityId, ownerMemberId, endpointPublicKey, failureDomain, region, maxStorageBytes, certificateSignature, issuedAt, expiresAt]
+      properties:
+        nodeId: { type: string }
+        communityId: { type: string }
+        ownerMemberId: { type: string }
+        endpointPublicKey: { type: string }
+        failureDomain: { type: string }
+        region: { type: string }
+        maxStorageBytes: { type: integer, minimum: 1 }
+        certificateSignature: { type: string }
+        issuedAt: { type: integer }
+        expiresAt: { type: integer }
+    ObjectRecord:
+      type: object
+      additionalProperties: false
+      required: [cid, ciphertextSize, objectKind, replicaTarget]
+      properties:
+        cid: { type: string, pattern: "^[0-9a-f]{64}$" }
+        ciphertextSize: { type: integer, minimum: 1, maximum: 4325376 }
+        objectKind: { type: string, enum: [data_chunk, encrypted_manifest, encrypted_catalog] }
+        replicaTarget: { type: integer, minimum: 1, maximum: 9 }
+    StorageReceipt:
+      type: object
+      additionalProperties: false
+      required: [placementId, nodeId, createdAt, ciphertextBase64, nodeSignature]
+      properties:
+        placementId: { type: string }
+        nodeId: { type: string }
+        createdAt: { type: integer }
+        ciphertextBase64: { type: string, description: Ephemeral encrypted bytes; verified but never persisted in D1. }
+        nodeSignature: { type: string }
+    TaskProof:
+      type: object
+      additionalProperties: false
+      required: [storedAt, ciphertextBase64, nodeSignature]
+      properties:
+        storedAt: { type: integer }
+        ciphertextBase64: { type: string, description: Ephemeral encrypted bytes; verified but never persisted in D1. }
+        nodeSignature: { type: string }
     AuthSessionRequest:
       type: object
       additionalProperties: false

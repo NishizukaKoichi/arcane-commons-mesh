@@ -21,3 +21,4 @@ rand_core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
+zeroize.workspace = true

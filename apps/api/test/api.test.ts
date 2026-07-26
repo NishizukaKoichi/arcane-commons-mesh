@@ -179,12 +179,12 @@ describe("control plane API", () => {
     expect(valid.status).toBe(200);
   });
 
-  it("counts only the latest vote for one member and keeps both history events", async () => {
+  it("rejects a second vote from the same member", async () => {
     const repository = new MemoryRepository();
     const { app } = createApp({ repository, now: () => 100 });
     const { token, privateKey } = await login(app, repository);
     repository.proposals.add("proposal-a");
-    for (const choice of ["yes", "no"] as const) {
+    for (const [index, choice] of (["yes", "no"] as const).entries()) {
       const castAt = 100;
       const canonicalChoice = choice.charAt(0).toUpperCase() + choice.slice(1);
       const voteMessage = `acm.vote.v1|proposal-a|member-a|${canonicalChoice}|${castAt}`;
@@ -201,13 +201,13 @@ describe("control plane API", () => {
           memberSignature: toBase64Url(sign(null, Buffer.from(voteMessage), privateKey))
         })
       });
-      expect(response.status).toBe(200);
+      expect(response.status).toBe(index === 0 ? 200 : 409);
     }
     const result = await app.request("/v1/proposals/proposal-a/result", {
       headers: { authorization: `Bearer ${token}` }
     });
-    expect(await result.json()).toEqual({ yes: 0, no: 1, abstain: 0 });
-    expect(repository.voteHistory).toHaveLength(2);
+    expect(await result.json()).toEqual({ yes: 1, no: 0, abstain: 0 });
+    expect(repository.voteHistory).toHaveLength(1);
   });
 
   it("rejects a vote with a forged member signature", async () => {

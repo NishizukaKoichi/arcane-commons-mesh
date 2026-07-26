@@ -22,7 +22,7 @@ import {
   Vote
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 type Page = "dashboard" | "vault" | "storage" | "community" | "recovery";
 type Language = "ja" | "en";
@@ -50,12 +50,34 @@ type StoredFile = {
   size: string;
   copies: string;
   modified: string;
+  deleted?: boolean;
 };
+
+type DesktopFileRecord = {
+  fileId: string;
+  name: string;
+  sizeBytes: number;
+  safeReplicas: string;
+  deleted: boolean;
+};
+
+function displayDesktopFiles(files: DesktopFileRecord[]): StoredFile[] {
+  return files.map((file) => ({
+    fileId: file.fileId,
+    name: file.name,
+    size: formatBytes(file.sizeBytes),
+    copies: file.safeReplicas,
+    modified: file.deleted ? "削除予約中" : "保存済み",
+    deleted: file.deleted
+  }));
+}
 
 export function App() {
   const [page, setPage] = useState<Page>("dashboard");
   const [language, setLanguage] = useState<Language>("ja");
   const [onboarded, setOnboarded] = useState(false);
+  const [checkingVault, setCheckingVault] = useState(true);
+  const [hasExistingVault, setHasExistingVault] = useState(false);
   const [recoverySaved, setRecoverySaved] = useState(false);
   const [sessionPassphrase, setSessionPassphrase] = useState("");
   const [files, setFiles] = useState<StoredFile[]>([]);
@@ -65,6 +87,33 @@ export function App() {
   const [notice, setNotice] = useState("");
   const [mobileNav, setMobileNav] = useState(false);
 
+  useEffect(() => {
+    if (!isTauri()) {
+      setCheckingVault(false);
+      return;
+    }
+    invoke<{ hasVault: boolean }>("desktop_status")
+      .then((status) => setHasExistingVault(status.hasVault))
+      .catch((reason) => setNotice(String(reason)))
+      .finally(() => setCheckingVault(false));
+  }, []);
+
+  if (checkingVault) {
+    return <main className="onboarding"><p>既存の保管庫を確認しています…</p></main>;
+  }
+
+  if (hasExistingVault && !onboarded) {
+    return (
+      <UnlockVault
+        onUnlock={(passphrase, storedFiles) => {
+          setSessionPassphrase(passphrase);
+          setFiles(storedFiles);
+          setOnboarded(true);
+        }}
+      />
+    );
+  }
+
   if (!onboarded) {
     return (
       <Onboarding
@@ -73,7 +122,16 @@ export function App() {
           setRecoverySaved(true);
           setSessionPassphrase(passphrase);
         }}
-        onComplete={() => setOnboarded(true)}
+        onComplete={() => {
+          setHasExistingVault(true);
+          setOnboarded(true);
+        }}
+        onImported={(passphrase, recoveredFiles) => {
+          setSessionPassphrase(passphrase);
+          setFiles(recoveredFiles);
+          setHasExistingVault(true);
+          setOnboarded(true);
+        }}
       />
     );
   }
@@ -119,7 +177,7 @@ export function App() {
         </nav>
         <div className="network-status">
           <span className="status-dot" />
-          <div><strong>共同体に接続中</strong><span>4つの保存拠点</span></div>
+          <div><strong>ローカルMVP</strong><span>共同体ネットワーク未接続</span></div>
         </div>
       </aside>
       <main className="workspace">
@@ -127,7 +185,7 @@ export function App() {
           <button className="icon-button mobile-menu" onClick={() => setMobileNav(!mobileNav)} aria-label="メニュー">
             <Menu size={20} />
           </button>
-          <div className="breadcrumb">白樺の共同体 <ChevronRight size={14} /> {labels[language][page]}</div>
+          <div className="breadcrumb">ローカル検証環境 <ChevronRight size={14} /> {labels[language][page]}</div>
           <button
             className="language-button"
             onClick={() => setLanguage(language === "ja" ? "en" : "ja")}
@@ -165,7 +223,9 @@ export function App() {
             />
           )}
           {page === "community" && <Community />}
-          {page === "recovery" && <Recovery language={language} />}
+          {page === "recovery" && (
+            <Recovery language={language} passphrase={sessionPassphrase} onNotice={setNotice} />
+          )}
         </div>
       </main>
       {deleteTarget && (
@@ -179,7 +239,13 @@ export function App() {
                 passphrase: sessionPassphrase
               });
             }
-            setFiles((current) => current.filter((file) => file.fileId !== deleteTarget.fileId));
+            setFiles((current) =>
+              current.map((file) =>
+                file.fileId === deleteTarget.fileId
+                  ? { ...file, copies: "削除予約・30日間復元可", deleted: true }
+                  : file
+              )
+            );
             setDeleteTarget(null);
             setNotice("30日保持の削除予約を記録しました");
           }}
@@ -190,18 +256,66 @@ export function App() {
   );
 }
 
+function UnlockVault({
+  onUnlock
+}: {
+  onUnlock: (passphrase: string, files: StoredFile[]) => void;
+}) {
+  const [passphrase, setPassphrase] = useState("");
+  const [error, setError] = useState("");
+  const unlock = async () => {
+    setError("");
+    try {
+      await invoke<number>("gc_vault", { passphrase });
+      const storedFiles = await invoke<DesktopFileRecord[]>("list_vault_files", { passphrase });
+      onUnlock(passphrase, displayDesktopFiles(storedFiles));
+    } catch (reason) {
+      setError(`保管庫を開けませんでした: ${String(reason)}`);
+    }
+  };
+  return (
+    <main className="onboarding">
+      <section className="onboarding-copy">
+        <div className="brand onboarding-brand"><div className="brand-mark"><Network size={22} /></div><strong>魔法網</strong></div>
+        <p className="eyebrow">既存の保管庫</p>
+        <h1>保管庫を開く。</h1>
+        <p className="intro">この端末にある暗号化カタログを読み込みます。新しい保管庫で上書きはしません。</p>
+      </section>
+      <section className="onboarding-form" aria-labelledby="unlock-title">
+        <h2 id="unlock-title">復旧パスフレーズ</h2>
+        <label>
+          パスフレーズ
+          <input
+            type="password"
+            value={passphrase}
+            onChange={(event) => setPassphrase(event.target.value)}
+          />
+        </label>
+        <button className="primary-button" disabled={passphrase.length < 12} onClick={unlock}>
+          保管庫を開く <ChevronRight size={17} />
+        </button>
+        {error && <p className="form-error" role="alert">{error}</p>}
+      </section>
+    </main>
+  );
+}
+
 function Onboarding({
   recoverySaved,
   onRecoverySaved,
-  onComplete
+  onComplete,
+  onImported
 }: {
   recoverySaved: boolean;
   onRecoverySaved: (passphrase: string) => void;
   onComplete: () => void;
+  onImported: (passphrase: string, files: StoredFile[]) => void;
 }) {
   const [passphrase, setPassphrase] = useState("");
   const [exportPath, setExportPath] = useState("");
   const [error, setError] = useState("");
+  const [importPath, setImportPath] = useState("");
+  const [sourceRoots, setSourceRoots] = useState("");
   const saveRecovery = async () => {
     setError("");
     try {
@@ -217,14 +331,34 @@ function Onboarding({
       setError(String(reason));
     }
   };
+  const importRecovery = async () => {
+    setError("");
+    try {
+      if (!isTauri()) {
+        throw new Error("ブラウザ表示では復旧を実行できません");
+      }
+      const roots = sourceRoots
+        .split(/\r?\n|,/)
+        .map((value) => value.trim())
+        .filter(Boolean);
+      const recoveredFiles = await invoke<DesktopFileRecord[]>("import_recovery_kit", {
+        recoveryPath: importPath,
+        sourceRoots: roots,
+        passphrase
+      });
+      onImported(passphrase, displayDesktopFiles(recoveredFiles));
+    } catch (reason) {
+      setError(String(reason));
+    }
+  };
   return (
     <main className="onboarding">
       <section className="onboarding-copy">
         <div className="brand onboarding-brand"><div className="brand-mark"><Network size={22} /></div><strong>魔法網</strong></div>
         <p className="eyebrow">最初の保管庫</p>
         <h1>大切なものを、<br />自分の鍵で守る。</h1>
-        <p className="intro">ファイルはこの端末で暗号化され、共同体の三つの保存拠点へ分かれて保管されます。</p>
-        <div className="privacy-promise"><ShieldCheck size={22} /><span>運営者や保存拠点に、ファイル名・中身・復号鍵は渡りません。</span></div>
+        <p className="intro">このv0.1デスクトップではファイルを端末内で暗号化し、同じ端末上の独立したローカル保存領域へ複製します。</p>
+        <div className="privacy-promise"><ShieldCheck size={22} /><span>共同体ノードへの実接続はCLIのローカル複数プロセス検証に限定されています。</span></div>
       </section>
       <section className="onboarding-form" aria-labelledby="setup-title">
         <p className="step-count">手順 1 / 3</p>
@@ -247,6 +381,31 @@ function Onboarding({
           {recoverySaved ? <Check size={18} /> : <ArchiveRestore size={18} />}
           {recoverySaved ? "復旧ファイルを保存しました" : "復旧ファイルを保存"}
         </button>
+        <div className="settings-list">
+          <label>
+            既存の復旧ファイル
+            <input
+              value={importPath}
+              onChange={(event) => setImportPath(event.target.value)}
+              placeholder="/Volumes/Backup/owner.acm-recovery"
+            />
+          </label>
+          <label>
+            保存ノードフォルダ（1行に1つ）
+            <textarea
+              value={sourceRoots}
+              onChange={(event) => setSourceRoots(event.target.value)}
+              placeholder={"/Volumes/Node-A/storage\n/Volumes/Node-B/storage\n/Volumes/Node-C/storage"}
+            />
+          </label>
+          <button
+            className="secondary-action"
+            disabled={passphrase.length < 12 || !importPath || !sourceRoots.trim()}
+            onClick={() => void importRecovery()}
+          >
+            復旧ファイルから取り戻す
+          </button>
+        </div>
         <button className="primary-action" disabled={!recoverySaved} onClick={onComplete}>
           保管庫を作成 <ChevronRight size={18} />
         </button>
@@ -270,13 +429,13 @@ function Dashboard({
       <PageTitle eyebrow="今日の状態" title="概要" action={<button className="primary-action compact" onClick={() => onNavigate("vault")}><Plus size={17} /> ファイルを追加</button>} />
       <div className="safety-line">
         <div className="safety-orb"><ShieldCheck size={30} /></div>
-        <div><p>{files.length ? "保管庫は安全です" : "保管庫は空です"}</p><strong>{files.length ? "すべてのファイルに必要な複製があります" : "ファイルを追加すると暗号化して3拠点へ保存します"}</strong></div>
+        <div><p>{files.length ? "ローカル複製は正常です" : "保管庫は空です"}</p><strong>{files.length ? "同一端末内に必要な暗号化複製があります" : "ファイルを追加すると暗号化して3領域へ保存します"}</strong></div>
         <span className="last-backup">{files.length ? "最終バックアップ たった今" : "バックアップなし"}</span>
       </div>
       <div className="metric-row">
         <Metric label="ファイル" value={String(files.length)} detail="暗号化済み" />
-        <Metric label="安全な複製" value={files.length ? "3 / 3" : "—"} detail="3拠点へ分散保管" />
-        <Metric label="今月の共有容量" value="68%" detail="残り 3.4 GiB相当" />
+        <Metric label="ローカル複製" value={files.length ? "3 / 3" : "—"} detail="同一端末内・地域分散なし" />
+        <Metric label="共有容量" value="—" detail="調整API未接続" />
       </div>
       <div className="split-section">
         <section>
@@ -286,11 +445,11 @@ function Dashboard({
           </div>
         </section>
         <section>
-          <SectionHeading title="保存拠点" link="管理" onClick={() => onNavigate("storage")} />
+          <SectionHeading title="ローカル保存領域" link="管理" onClick={() => onNavigate("storage")} />
           <div className="node-list">
-            <NodeRow name="このMac" state="接続中" usage="1.6 / 10 GB" />
-            <NodeRow name="Blue Mountains" state="接続中" usage="2.1 / 20 GB" />
-            <NodeRow name="Kyoto Commons" state="低速" usage="2.8 / 15 GB" warning />
+            <NodeRow name="このMac / 領域 1" state="ローカル" usage="自動管理" />
+            <NodeRow name="このMac / 領域 2" state="ローカル" usage="自動管理" />
+            <NodeRow name="このMac / 領域 3" state="ローカル" usage="自動管理" warning />
           </div>
         </section>
       </div>
@@ -317,7 +476,7 @@ function Vault({
     setError("");
     try {
       const result = isTauri()
-        ? await invoke<{ fileId: string; name: string; sizeBytes: number; safeReplicas: string }>(
+        ? await invoke<{ fileId: string; name: string; sizeBytes: number; safeReplicas: string; deleted: boolean }>(
             "add_vault_file",
             { sourcePath, passphrase }
           )
@@ -325,14 +484,16 @@ function Vault({
             fileId: `browser-${Date.now()}`,
             name: sourcePath.split("/").pop() || "選択したファイル",
             sizeBytes: 0,
-            safeReplicas: "3/3"
+            safeReplicas: "3/3",
+            deleted: false
           };
       onAdded({
         fileId: result.fileId,
         name: result.name,
         size: formatBytes(result.sizeBytes),
         copies: result.safeReplicas,
-        modified: "たった今"
+        modified: "たった今",
+        deleted: result.deleted
       });
       setSourcePath("");
     } catch (reason) {
@@ -352,7 +513,7 @@ function Vault({
             <span>{file.size}</span>
             <span className={file.copies === "3/3" ? "copy-safe" : "copy-warning"}>{file.copies}</span>
             <span>{file.modified}</span>
-            <span><button className="icon-button" aria-label={`${file.name}を復元`} onClick={() => void onRestore(file)}><ArchiveRestore size={17} /></button><button className="icon-button danger" aria-label={`${file.name}を削除`} onClick={() => onDelete(file)}><Trash2 size={17} /></button></span>
+            <span><button className="icon-button" aria-label={`${file.name}を復元`} onClick={() => void onRestore(file)}><ArchiveRestore size={17} /></button>{!file.deleted && <button className="icon-button danger" aria-label={`${file.name}を削除`} onClick={() => onDelete(file)}><Trash2 size={17} /></button>}</span>
           </div>
         ))}
       </div>
@@ -392,7 +553,7 @@ function ProvideStorage({
     <section className="content narrow-content">
       <PageTitle eyebrow="共同体へ余白を貸す" title="保存を提供" />
       <div className="provider-status">
-        <div><p>このMacの保存拠点</p><strong>{enabled ? "提供中" : "停止中"}</strong></div>
+        <div><p>このMacの保存領域設定</p><strong>{enabled ? "設定済み" : "未設定"}</strong></div>
         <button
           role="switch"
           aria-checked={enabled}
@@ -417,7 +578,7 @@ function ProvideStorage({
       </div>
       {!path && <div className="inline-warning">専用フォルダを選ぶまで、保存提供は開始できません。</div>}
       {error && <div className="inline-warning" role="alert">{error}</div>}
-      <div className="audit-summary"><ShieldCheck size={21} /><div><strong>直近の確認は成功</strong><span>暗号化された保存データを3時間前に確認しました</span></div></div>
+      <div className="audit-summary"><ShieldCheck size={21} /><div><strong>ノードサービス未起動</strong><span>この画面は保存先と上限を記録します。共同体への登録・提供開始はまだ行いません。</span></div></div>
     </section>
   );
 }
@@ -425,18 +586,16 @@ function ProvideStorage({
 function Community() {
   return (
     <section className="content">
-      <PageTitle eyebrow="白樺の共同体" title="共同体" action={<button className="secondary-action compact"><Users size={17} /> 招待を作る</button>} />
-      <div className="community-summary"><div><strong>12</strong><span>会員</span></div><div><strong>4</strong><span>保存拠点</span></div><div><strong>3</strong><span>障害領域</span></div></div>
+      <PageTitle eyebrow="未接続" title="共同体" />
+      <div className="community-summary"><div><strong>—</strong><span>会員</span></div><div><strong>—</strong><span>保存拠点</span></div><div><strong>—</strong><span>障害領域</span></div></div>
       <div className="split-section">
         <section>
           <SectionHeading title="会員と加入申請" link="すべて表示" />
-          <div className="member-row"><span className="avatar">KN</span><div><strong>Koichi Nishizuka</strong><span>管理者・確認拠点</span></div><span className="quiet-badge">自分</span></div>
-          <div className="member-row"><span className="avatar pale">AM</span><div><strong>Aiko Mori</strong><span>会員</span></div><span className="presence" /></div>
-          <div className="join-request"><div><strong>1件の加入申請</strong><span>公開鍵を確認して承認してください</span></div><button className="secondary-action compact">確認</button></div>
+          <div className="join-request"><div><strong>調整APIへの接続が必要です</strong><span>会員や加入申請の実データは、接続後に表示されます。</span></div></div>
         </section>
         <section>
           <SectionHeading title="提案と投票" link="提案を作る" />
-          <div className="proposal"><div className="proposal-icon"><Vote size={20} /></div><div><strong>保存確認の頻度を6時間にする</strong><span>残り2日 · 8 / 12人が投票</span><div className="vote-bar"><span style={{ width: "72%" }} /></div></div></div>
+          <div className="proposal"><div className="proposal-icon"><Vote size={20} /></div><div><strong>投票データはありません</strong><span>共同体へ接続すると提案を取得します。</span></div></div>
           <p className="governance-note">保存容量や共有容量によって、投票の重みは変わりません。</p>
         </section>
       </div>
@@ -444,12 +603,28 @@ function Community() {
   );
 }
 
-function Recovery({ language }: { language: Language }) {
+function Recovery({
+  language,
+  passphrase,
+  onNotice
+}: {
+  language: Language;
+  passphrase: string;
+  onNotice: (notice: string) => void;
+}) {
   const diagnostics = useMemo(() => ["アプリのバージョン", "接続状態", "匿名化したエラー履歴"], []);
   return (
     <section className="content narrow-content">
       <PageTitle eyebrow="持ち出せる仕組み" title="復旧と設定" />
-      <div className="recovery-callout"><LockKeyhole size={25} /><div><strong>復旧ファイルはこの端末だけで作られます</strong><span>運営者や共同体から復旧パスフレーズを確認することはできません。</span></div><button className="secondary-action compact"><ArchiveRestore size={17} /> 再出力</button></div>
+      <div className="recovery-callout"><LockKeyhole size={25} /><div><strong>復旧ファイルはこの端末だけで作られます</strong><span>運営者や共同体から復旧パスフレーズを確認することはできません。</span></div><button className="secondary-action compact" onClick={() => {
+        if (!isTauri()) {
+          onNotice("ブラウザ表示では復旧ファイルを書き出しません");
+          return;
+        }
+        void invoke<{ path: string }>("copy_recovery_kit", { passphrase })
+          .then((result) => onNotice(`復旧ファイルを再出力しました: ${result.path}`))
+          .catch((reason) => onNotice(String(reason)));
+      }}><ArchiveRestore size={17} /> 再出力</button></div>
       <div className="settings-list">
         <div className="setting-row"><span><Globe2 size={19} /><span><strong>調整API</strong><small>http://127.0.0.1:8787</small></span></span><button className="text-button">変更</button></div>
         <div className="setting-row"><span><Boxes size={19} /><span><strong>Relay</strong><small>開発用・直接接続を優先</small></span></span><button className="text-button">変更</button></div>

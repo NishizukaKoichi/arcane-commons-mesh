@@ -1,5 +1,7 @@
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
+import { blake3 } from "@noble/hashes/blake3.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
 import {
   catalogPointer,
   challengeSession,
@@ -11,6 +13,7 @@ import {
   objectRecord,
   placement,
   proposal,
+  taskProof,
   vote
 } from "./schemas";
 import {
@@ -23,7 +26,12 @@ import {
   type SessionPrincipal,
   toBase64Url
 } from "./repository";
-import { appendAuditEvent, runMaintenance } from "./maintenance";
+import { prepareAuditEvent, runMaintenance } from "./maintenance";
+import {
+  memberIdFor,
+  membershipCanonicalBytes,
+  nodeCertificateCanonicalBytes
+} from "./canonical";
 
 type Bindings = {
   DB?: D1Database;
@@ -50,7 +58,7 @@ export function createApp(options: AppOptions = {}) {
   const verifySignature = async (
     publicKey: string,
     signature: string,
-    message: string
+    message: string | Uint8Array
   ): Promise<boolean> => {
     try {
       const key = await crypto.subtle.importKey(
@@ -64,10 +72,22 @@ export function createApp(options: AppOptions = {}) {
         "Ed25519",
         key,
         asArrayBuffer(fromBase64Url(signature)),
-        asArrayBuffer(new TextEncoder().encode(message))
+        asArrayBuffer(typeof message === "string" ? new TextEncoder().encode(message) : message)
       );
     } catch {
       return false;
+    }
+  };
+  const decodeVerifiedCiphertext = (
+    encoded: string,
+    expectedCid: string
+  ): Uint8Array | undefined => {
+    try {
+      const bytes = fromBase64Url(encoded);
+      if (bytes.length > 4 * 1024 * 1024 + 128 * 1024) return undefined;
+      return bytesToHex(blake3(bytes)) === expectedCid ? bytes : undefined;
+    } catch {
+      return undefined;
     }
   };
 
@@ -168,6 +188,28 @@ export function createApp(options: AppOptions = {}) {
     if (!roles.includes("member") || !roles.includes("admin")) {
       return context.json({ error: "founder_requires_member_and_admin_roles" }, 400);
     }
+    if (
+      item.founderMemberId !== memberIdFor(item.founderPublicKey) ||
+      item.createdAt > now() ||
+      item.founderCredentialExpiresAt <= now() ||
+      item.founderCredentialExpiresAt - item.createdAt > 31_536_000 ||
+      !(await verifySignature(
+        item.rootPublicKey,
+        item.founderCredentialSignature,
+        membershipCanonicalBytes({
+          communityId: item.communityId,
+          memberPublicKey: item.founderPublicKey,
+          memberId: item.founderMemberId,
+          roles,
+          issuedAt: item.createdAt,
+          expiresAt: item.founderCredentialExpiresAt,
+          serial: item.founderCredentialSerial,
+          issuerPublicKey: item.rootPublicKey
+        })
+      ))
+    ) {
+      return context.json({ error: "invalid_founder_credential" }, 401);
+    }
     const message = [
       "acm.community-bootstrap.v1",
       item.communityId,
@@ -184,6 +226,13 @@ export function createApp(options: AppOptions = {}) {
     }
     if (context.env?.DB) {
       try {
+        const audit = await prepareAuditEvent(context.env.DB, {
+          communityId: item.communityId,
+          kind: "community_created",
+          actorId: item.founderMemberId,
+          subjectId: item.communityId,
+          occurredAt: item.createdAt
+        });
         await context.env.DB.batch([
           context.env.DB.prepare(
             `INSERT INTO communities
@@ -212,12 +261,25 @@ export function createApp(options: AppOptions = {}) {
              (serial, community_id, member_id, credential_json, issued_at, expires_at)
              VALUES (?, ?, ?, ?, ?, ?)`
           ).bind(
-            `bootstrap:${item.communityId}`,
+            String(item.founderCredentialSerial),
             item.communityId,
             item.founderMemberId,
-            JSON.stringify({ message, rootSignature: item.rootSignature }),
+            JSON.stringify({
+              claims: {
+                credentialVersion: 1,
+                communityId: item.communityId,
+                memberPublicKey: item.founderPublicKey,
+                memberId: item.founderMemberId,
+                roles,
+                issuedAt: item.createdAt,
+                expiresAt: item.founderCredentialExpiresAt,
+                serial: item.founderCredentialSerial,
+                issuerPublicKey: item.rootPublicKey
+              },
+              signature: item.founderCredentialSignature
+            }),
             item.createdAt,
-            item.createdAt + 31_536_000
+            item.founderCredentialExpiresAt
           ),
           context.env.DB.prepare(
             "INSERT INTO credit_accounts (member_id, created_at) VALUES (?, ?)"
@@ -237,15 +299,9 @@ export function createApp(options: AppOptions = {}) {
             `base:${item.founderMemberId}:${new Date(item.createdAt * 1000).toISOString().slice(0, 7)}`,
             item.createdAt,
             item.createdAt + 31 * 86400
-          )
+          ),
+          audit.statement
         ]);
-        await appendAuditEvent(context.env.DB, {
-          communityId: item.communityId,
-          kind: "community_created",
-          actorId: item.founderMemberId,
-          subjectId: item.communityId,
-          occurredAt: item.createdAt
-        });
       } catch {
         return context.json({ error: "community_conflict" }, 409);
       }
@@ -310,24 +366,21 @@ export function createApp(options: AppOptions = {}) {
       const item = context.req.valid("json");
       const requestId = crypto.randomUUID();
       if (context.env?.DB) {
-        const invite = await context.env.DB.prepare(
-          `SELECT invite_id FROM invites
+        const claimed = await context.env.DB.prepare(
+          `UPDATE invites SET consumed_at = ?
            WHERE community_id = ? AND code_hash = ? AND consumed_at IS NULL AND expires_at >= ?`
         )
-          .bind(communityId, await hashOpaque(item.inviteCode), now())
-          .first<{ invite_id: string }>();
-        if (!invite) return context.json({ error: "invalid_invite" }, 401);
+          .bind(now(), communityId, await hashOpaque(item.inviteCode), now())
+          .run();
+        if ((claimed.meta.changes ?? 0) !== 1) {
+          return context.json({ error: "invalid_invite" }, 401);
+        }
         try {
-          await context.env.DB.batch([
-            context.env.DB.prepare(
-              `INSERT INTO join_requests
-               (request_id, community_id, member_public_key, requested_at, status)
-               VALUES (?, ?, ?, ?, 'pending')`
-            ).bind(requestId, communityId, item.memberPublicKey, now()),
-            context.env.DB.prepare(
-              "UPDATE invites SET consumed_at = ? WHERE invite_id = ? AND consumed_at IS NULL"
-            ).bind(now(), invite.invite_id)
-          ]);
+          await context.env.DB.prepare(
+            `INSERT INTO join_requests
+             (request_id, community_id, member_public_key, requested_at, status)
+             VALUES (?, ?, ?, ?, 'pending')`
+          ).bind(requestId, communityId, item.memberPublicKey, now()).run();
         } catch {
           return context.json({ error: "join_request_conflict" }, 409);
         }
@@ -363,16 +416,9 @@ export function createApp(options: AppOptions = {}) {
         return context.json({ error: "admin_required" }, 403);
       }
       const roles = [...item.roles].sort();
-      const message = [
-        "acm.membership.v1",
-        communityId,
-        item.memberId,
-        item.memberPublicKey,
-        roles.join(","),
-        item.serial,
-        item.issuedAt,
-        item.expiresAt
-      ].join("|");
+      if (item.memberId !== memberIdFor(item.memberPublicKey)) {
+        return context.json({ error: "member_id_mismatch" }, 400);
+      }
       if (!context.env?.DB) {
         memoryRepository.addMember({
           memberId: item.memberId,
@@ -393,11 +439,26 @@ export function createApp(options: AppOptions = {}) {
       )
         .bind(requestId, communityId)
         .first<{ member_public_key: string }>();
+      const credentialBytes = root
+        ? membershipCanonicalBytes({
+            communityId,
+            memberPublicKey: item.memberPublicKey,
+            memberId: item.memberId,
+            roles,
+            issuedAt: item.issuedAt,
+            expiresAt: item.expiresAt,
+            serial: item.serial,
+            issuerPublicKey: root.root_public_key
+          })
+        : new Uint8Array();
       if (
         !root ||
         !pending ||
+        item.issuedAt > now() ||
+        item.expiresAt <= now() ||
+        item.expiresAt - item.issuedAt > 31_536_000 ||
         pending.member_public_key !== item.memberPublicKey ||
-        !(await verifySignature(root.root_public_key, item.rootSignature, message))
+        !(await verifySignature(root.root_public_key, item.rootSignature, credentialBytes))
       ) {
         return context.json({ error: "invalid_membership_approval" }, 401);
       }
@@ -416,7 +477,20 @@ export function createApp(options: AppOptions = {}) {
             item.serial,
             communityId,
             item.memberId,
-            JSON.stringify({ message, rootSignature: item.rootSignature }),
+            JSON.stringify({
+              claims: {
+                credentialVersion: 1,
+                communityId,
+                memberPublicKey: item.memberPublicKey,
+                memberId: item.memberId,
+                roles,
+                issuedAt: item.issuedAt,
+                expiresAt: item.expiresAt,
+                serial: item.serial,
+                issuerPublicKey: root.root_public_key
+              },
+              signature: item.rootSignature
+            }),
             item.issuedAt,
             item.expiresAt
           ),
@@ -492,53 +566,70 @@ export function createApp(options: AppOptions = {}) {
   app.post("/v1/nodes", zValidator("json", node), async (context) => {
     const item = context.req.valid("json");
     const principal = context.get("principal");
-    if (
-      item.communityId !== principal.communityId ||
-      item.ownerMemberId !== principal.memberId ||
-      item.expiresAt <= now()
+      if (
+        item.communityId !== principal.communityId ||
+        item.ownerMemberId !== principal.memberId ||
+        item.issuedAt > now() ||
+        item.expiresAt <= now() ||
+        item.expiresAt - item.issuedAt > 31_536_000
     ) {
       return context.json({ error: "node_scope_rejected" }, 403);
     }
-    const message = [
-      "acm.node-certificate.v1",
-      item.nodeId,
-      item.communityId,
-      item.ownerMemberId,
-      item.endpointPublicKey,
-      "node",
-      item.maxStorageBytes,
-      item.issuedAt,
-      item.expiresAt
-    ].join("|");
-    if (!(await verifySignature(principal.publicKey, item.certificateSignature, message))) {
+    const certificateBytes = nodeCertificateCanonicalBytes(item);
+    if (
+      !(await verifySignature(
+        principal.publicKey,
+        item.certificateSignature,
+        certificateBytes
+      ))
+    ) {
       return context.json({ error: "invalid_node_certificate" }, 401);
     }
     if (context.env?.DB) {
       try {
-        await context.env.DB.prepare(
-          `INSERT INTO nodes
-           (node_id, community_id, owner_member_id, endpoint_public_key, certificate_json,
-            failure_domain, region, max_storage_bytes, status)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')`
-        )
-          .bind(
-            item.nodeId,
-            item.communityId,
-            item.ownerMemberId,
-            item.endpointPublicKey,
-            JSON.stringify({ message, signature: item.certificateSignature }),
-            item.failureDomain,
-            item.region,
-            item.maxStorageBytes
-          )
-          .run();
-        await appendAuditEvent(context.env.DB, {
+        const audit = await prepareAuditEvent(context.env.DB, {
           communityId: item.communityId,
           kind: "node_registered",
           actorId: principal.memberId,
           subjectId: item.nodeId,
           occurredAt: now()
         });
+        await context.env.DB.batch([
+          context.env.DB
+            .prepare(
+              `INSERT INTO nodes
+               (node_id, community_id, owner_member_id, endpoint_public_key, certificate_json,
+                failure_domain, region, max_storage_bytes, status,
+                certificate_issued_at, certificate_expires_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`
+            )
+          .bind(
+            item.nodeId,
+            item.communityId,
+            item.ownerMemberId,
+            item.endpointPublicKey,
+            JSON.stringify({
+              claims: {
+                certificateVersion: 1,
+                nodeId: item.nodeId,
+                communityId: item.communityId,
+                ownerMemberId: item.ownerMemberId,
+                endpointPublicKey: item.endpointPublicKey,
+                allowedRoles: ["node"],
+                maxStorageBytes: item.maxStorageBytes,
+                issuedAt: item.issuedAt,
+                expiresAt: item.expiresAt
+              },
+              signature: item.certificateSignature
+            }),
+            item.failureDomain,
+            item.region,
+            item.maxStorageBytes,
+            item.issuedAt,
+            item.expiresAt
+          ),
+          audit.statement
+        ]);
       } catch {
         return context.json({ error: "node_conflict" }, 409);
       }
@@ -555,9 +646,10 @@ export function createApp(options: AppOptions = {}) {
       if (context.env?.DB) {
         const owned = await context.env.DB.prepare(
           `SELECT node_id FROM nodes
-           WHERE node_id = ? AND owner_member_id = ? AND community_id = ? AND status = 'active'`
+           WHERE node_id = ? AND owner_member_id = ? AND community_id = ?
+             AND status = 'active' AND certificate_issued_at <= ? AND certificate_expires_at > ?`
         )
-          .bind(nodeId, principal.memberId, principal.communityId)
+          .bind(nodeId, principal.memberId, principal.communityId, now(), now())
           .first();
         if (!owned) return context.json({ error: "node_owner_required" }, 403);
         await context.env.DB.prepare(
@@ -579,9 +671,10 @@ export function createApp(options: AppOptions = {}) {
               COALESCE(h.used_storage_bytes, 0) AS usedStorageBytes
        FROM nodes n LEFT JOIN node_heartbeats h ON h.node_id = n.node_id
        WHERE n.community_id = ? AND n.status = 'active'
+         AND n.certificate_issued_at <= ? AND n.certificate_expires_at > ?
        GROUP BY n.node_id ORDER BY n.node_id`
     )
-      .bind(principal.communityId)
+      .bind(principal.communityId, now(), now())
       .all();
     return context.json({ nodes: rows.results });
   });
@@ -593,9 +686,10 @@ export function createApp(options: AppOptions = {}) {
     const row = await context.env.DB.prepare(
       `SELECT node_id AS nodeId, endpoint_public_key AS endpointPublicKey,
               failure_domain AS failureDomain, region, max_storage_bytes AS maxStorageBytes, status
-       FROM nodes WHERE node_id = ? AND community_id = ?`
+       FROM nodes WHERE node_id = ? AND community_id = ?
+         AND certificate_issued_at <= ? AND certificate_expires_at > ?`
     )
-      .bind(context.req.param("nodeId"), principal.communityId)
+      .bind(context.req.param("nodeId"), principal.communityId, now(), now())
       .first();
     return row ? context.json(row) : context.json({ error: "not_found" }, 404);
   });
@@ -649,36 +743,60 @@ export function createApp(options: AppOptions = {}) {
         ) {
           return context.json({ error: "catalog_rollback_or_fork" }, 409);
         }
-        await context.env.DB.prepare(
-          `INSERT INTO vault_catalog_pointers
-           (vault_id, community_id, owner_member_id, catalog_cid, version,
-            previous_cid, signed_at, owner_signature)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(vault_id) DO UPDATE SET
-             catalog_cid = excluded.catalog_cid,
-             version = excluded.version,
-             previous_cid = excluded.previous_cid,
-             signed_at = excluded.signed_at,
-             owner_signature = excluded.owner_signature`
-        )
-          .bind(
-            vaultId,
-            principal.communityId,
-            principal.memberId,
-            item.catalogCid,
-            item.version,
-            item.previousCid,
-            item.signedAt,
-            item.ownerSignature
-          )
-          .run();
-        await appendAuditEvent(context.env.DB, {
+        const mutation = previous
+          ? context.env.DB
+              .prepare(
+                `UPDATE vault_catalog_pointers
+                 SET catalog_cid = ?, version = ?, previous_cid = ?,
+                     signed_at = ?, owner_signature = ?
+                 WHERE vault_id = ? AND community_id = ? AND owner_member_id = ?
+                   AND catalog_cid = ? AND version = ?`
+              )
+              .bind(
+              item.catalogCid,
+              item.version,
+              item.previousCid,
+              item.signedAt,
+              item.ownerSignature,
+              vaultId,
+              principal.communityId,
+              principal.memberId,
+              previous.catalog_cid,
+              previous.version
+            )
+          : context.env.DB
+              .prepare(
+                `INSERT INTO vault_catalog_pointers
+                 (vault_id, community_id, owner_member_id, catalog_cid, version,
+                  previous_cid, signed_at, owner_signature)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+              )
+              .bind(
+                vaultId,
+                principal.communityId,
+                principal.memberId,
+                item.catalogCid,
+                item.version,
+                item.previousCid,
+                item.signedAt,
+                item.ownerSignature
+              );
+        const audit = await prepareAuditEvent(context.env.DB, {
           communityId: principal.communityId,
           kind: "catalog_pointer_updated",
           actorId: principal.memberId,
           subjectId: vaultId,
           occurredAt: item.signedAt
         });
+        let results;
+        try {
+          results = await context.env.DB.batch([mutation, audit.statement]);
+        } catch {
+          return context.json({ error: "catalog_update_conflict" }, 409);
+        }
+        if ((results[0]?.meta.changes ?? 0) !== 1) {
+          return context.json({ error: "catalog_update_conflict" }, 409);
+        }
       }
       return context.json({ vaultId, ...item });
     }
@@ -750,11 +868,33 @@ export function createApp(options: AppOptions = {}) {
       const principal = context.get("principal");
       if (context.env?.DB) {
         const nodeRow = await context.env.DB.prepare(
-          "SELECT failure_domain FROM nodes WHERE node_id = ? AND community_id = ? AND status = 'active'"
+          `SELECT n.failure_domain, n.endpoint_public_key, o.ciphertext_size
+           FROM nodes n JOIN objects o ON o.object_cid = ?
+           WHERE n.node_id = ? AND n.community_id = ? AND n.owner_member_id = ?
+             AND status = 'active' AND certificate_issued_at <= ? AND certificate_expires_at > ?`
         )
-          .bind(item.nodeId, principal.communityId)
-          .first<{ failure_domain: string }>();
+          .bind(cidValue, item.nodeId, principal.communityId, principal.memberId, now(), now())
+          .first<{
+            failure_domain: string;
+            endpoint_public_key: string;
+            ciphertext_size: number;
+          }>();
         if (!nodeRow) return context.json({ error: "node_not_available" }, 409);
+        const receiptMessage = [
+          "acm.placement-receipt.v1",
+          item.placementId,
+          cidValue,
+          item.nodeId,
+          item.createdAt
+        ].join("|");
+        const placementBytes = decodeVerifiedCiphertext(item.ciphertextBase64, cidValue);
+        if (
+          !placementBytes ||
+          placementBytes.length !== nodeRow.ciphertext_size ||
+          !(await verifySignature(nodeRow.endpoint_public_key, item.nodeSignature, receiptMessage))
+        ) {
+          return context.json({ error: "invalid_storage_receipt" }, 401);
+        }
         try {
           await context.env.DB.prepare(
             `INSERT INTO placements
@@ -772,7 +912,16 @@ export function createApp(options: AppOptions = {}) {
           return context.json({ error: "placement_conflict" }, 409);
         }
       }
-      return context.json({ ...item, cid: cidValue, status: "healthy" }, 201);
+      return context.json(
+        {
+          placementId: item.placementId,
+          nodeId: item.nodeId,
+          createdAt: item.createdAt,
+          cid: cidValue,
+          status: "healthy"
+        },
+        201
+      );
     }
   );
   app.get("/v1/objects/:cid/placements", async (context) => {
@@ -810,9 +959,11 @@ export function createApp(options: AppOptions = {}) {
     const principal = context.get("principal");
     if (!context.env?.DB) return context.json({ nodeId, tasks: [] });
     const owned = await context.env.DB.prepare(
-      "SELECT node_id FROM nodes WHERE node_id = ? AND owner_member_id = ? AND community_id = ?"
+      `SELECT node_id FROM nodes
+       WHERE node_id = ? AND owner_member_id = ? AND community_id = ?
+         AND status = 'active' AND certificate_issued_at <= ? AND certificate_expires_at > ?`
     )
-      .bind(nodeId, principal.memberId, principal.communityId)
+      .bind(nodeId, principal.memberId, principal.communityId, now(), now())
       .first();
     if (!owned) return context.json({ error: "node_owner_required" }, 403);
     const rows = await context.env.DB.prepare(
@@ -833,6 +984,8 @@ export function createApp(options: AppOptions = {}) {
         const status = action === "accept" ? "accepted" : action === "complete" ? "completed" : "failed";
         const task = await context.env.DB.prepare(
           `SELECT t.task_kind, t.status AS task_status, t.object_cid, t.node_id, n.owner_member_id,
+                  n.endpoint_public_key, n.certificate_issued_at, n.certificate_expires_at,
+                  t.payload_json, t.expires_at AS task_expires_at,
                   o.ciphertext_size, o.community_id
            FROM node_tasks t
            JOIN nodes n ON n.node_id = t.node_id
@@ -846,25 +999,67 @@ export function createApp(options: AppOptions = {}) {
             object_cid: string | null;
             node_id: string;
             owner_member_id: string;
+            endpoint_public_key: string;
+            certificate_issued_at: number;
+            certificate_expires_at: number;
+            payload_json: string;
+            task_expires_at: number;
             ciphertext_size: number | null;
             community_id: string | null;
           }>();
         if (!task) return context.json({ error: "task_not_found_or_not_owned" }, 404);
+        if (
+          task.task_expires_at < now() ||
+          task.certificate_issued_at > now() ||
+          task.certificate_expires_at <= now()
+        ) {
+          return context.json({ error: "expired_task_or_node_certificate" }, 409);
+        }
         const requiredStatus = action === "accept" ? "pending" : "accepted";
         if (task.task_status !== requiredStatus) {
           return context.json({ error: "invalid_task_transition" }, 409);
         }
-        const transition = await context.env.DB.prepare(
-          `UPDATE node_tasks SET status = ?
-           WHERE task_id = ? AND node_id IN
-             (SELECT node_id FROM nodes WHERE owner_member_id = ? AND community_id = ?)
-             AND status = ?`
-        )
-          .bind(status, taskId, principal.memberId, principal.communityId, requiredStatus)
-          .run();
-        if ((transition.meta.changes ?? 0) !== 1) {
-          return context.json({ error: "task_transition_conflict" }, 409);
+        if (action === "complete") {
+          const parsed = taskProof.safeParse(await context.req.json().catch(() => null));
+          if (!parsed.success || !task.object_cid) {
+            return context.json({ error: "storage_proof_required" }, 400);
+          }
+          const payload = JSON.parse(task.payload_json) as { challenge?: string };
+          if (!payload.challenge) {
+            return context.json({ error: "task_challenge_missing" }, 409);
+          }
+          const proofMessage = [
+            "acm.task-proof.v1",
+            taskId,
+            task.task_kind,
+            task.object_cid,
+            payload.challenge,
+            parsed.data.storedAt
+          ].join("|");
+          const proofBytes = decodeVerifiedCiphertext(
+            parsed.data.ciphertextBase64,
+            task.object_cid
+          );
+          if (
+            !proofBytes ||
+            proofBytes.length !== task.ciphertext_size ||
+            !(await verifySignature(
+              task.endpoint_public_key,
+              parsed.data.nodeSignature,
+              proofMessage
+            ))
+          ) {
+            return context.json({ error: "invalid_storage_proof" }, 401);
+          }
         }
+        const taskStatements = [
+          context.env.DB.prepare(
+            `UPDATE node_tasks SET status = ?
+             WHERE task_id = ? AND node_id IN
+               (SELECT node_id FROM nodes WHERE owner_member_id = ? AND community_id = ?)
+               AND status = ?`
+          ).bind(status, taskId, principal.memberId, principal.communityId, requiredStatus)
+        ];
         if (
           action === "complete" &&
           task.task_kind === "audit_object" &&
@@ -874,43 +1069,43 @@ export function createApp(options: AppOptions = {}) {
             1,
             Math.ceil((task.ciphertext_size * 6 * 1000) / 1024 ** 3)
           );
-          await context.env.DB.prepare(
-              `INSERT OR IGNORE INTO credit_entries
-               (entry_id, member_id, idempotency_key, milli_gib_hour, reason,
-                occurred_at, expires_at)
-               VALUES (?, ?, ?, ?, 'audited_storage_earned', ?, ?)`
-            ).bind(
-              `audit-credit:${taskId}`,
-              task.owner_member_id,
-              `audit-credit:${taskId}`,
-              earned,
-              now(),
-              now() + 90 * 86400
-            )
-            .run();
+          taskStatements.push(
+            context.env.DB
+              .prepare(
+                `INSERT OR IGNORE INTO credit_entries
+                 (entry_id, member_id, idempotency_key, milli_gib_hour, reason,
+                  occurred_at, expires_at)
+                 VALUES (?, ?, ?, ?, 'audited_storage_earned', ?, ?)`
+              )
+              .bind(
+                `audit-credit:${taskId}`,
+                task.owner_member_id,
+                `audit-credit:${taskId}`,
+                earned,
+                now(),
+                now() + 90 * 86400
+              )
+          );
         }
         if (
           action === "complete" &&
           task.task_kind === "repair_object" &&
           task.object_cid
         ) {
-          await context.env.DB.prepare(
-            `INSERT INTO placements
-             (placement_id, object_cid, node_id, status, created_at)
-             VALUES (?, ?, ?, 'healthy', ?)
-             ON CONFLICT(object_cid, node_id)
-             DO UPDATE SET status = 'healthy'`
-          )
-            .bind(
-              `repair:${taskId}`,
-              task.object_cid,
-              task.node_id,
-              now()
-            )
-            .run();
+          taskStatements.push(
+            context.env.DB
+              .prepare(
+                `INSERT INTO placements
+                 (placement_id, object_cid, node_id, status, created_at)
+                 VALUES (?, ?, ?, 'healthy', ?)
+                 ON CONFLICT(object_cid, node_id)
+                 DO UPDATE SET status = 'healthy'`
+              )
+              .bind(`repair:${taskId}`, task.object_cid, task.node_id, now())
+          );
         }
         if (action !== "accept") {
-          await appendAuditEvent(context.env.DB, {
+          const audit = await prepareAuditEvent(context.env.DB, {
             communityId: principal.communityId,
             kind:
               task.task_kind === "audit_object"
@@ -924,6 +1119,16 @@ export function createApp(options: AppOptions = {}) {
             subjectId: task.object_cid ?? taskId,
             occurredAt: now()
           });
+          taskStatements.push(audit.statement);
+        }
+        let taskResults;
+        try {
+          taskResults = await context.env.DB.batch(taskStatements);
+        } catch {
+          return context.json({ error: "task_or_audit_conflict" }, 409);
+        }
+        if ((taskResults[0]?.meta.changes ?? 0) !== 1) {
+          return context.json({ error: "task_transition_conflict" }, 409);
         }
         return context.json({ taskId, status });
       }
@@ -1079,30 +1284,36 @@ export function createApp(options: AppOptions = {}) {
         `SELECT proposal_id FROM proposals
          WHERE proposal_id = ? AND community_id = ? AND opens_at <= ? AND closes_at >= ?`
       )
-        .bind(proposalId, principal.communityId, item.castAt, item.castAt)
+        .bind(proposalId, principal.communityId, now(), now())
         .first();
       if (!active) return context.json({ error: "proposal_not_found_or_closed" }, 404);
-      await context.env.DB.prepare(
-        `INSERT INTO votes (proposal_id, member_id, choice, cast_at, member_signature)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(proposal_id, member_id) DO UPDATE SET
-           choice = excluded.choice, cast_at = excluded.cast_at,
-           member_signature = excluded.member_signature`
-      )
-        .bind(proposalId, item.memberId, item.choice, item.castAt, item.memberSignature)
-        .run();
-      await appendAuditEvent(context.env.DB, {
-        communityId: principal.communityId,
-        kind: "vote_cast",
-        actorId: principal.memberId,
-        subjectId: proposalId,
-        occurredAt: item.castAt
-      });
+      try {
+        const audit = await prepareAuditEvent(context.env.DB, {
+          communityId: principal.communityId,
+          kind: "vote_cast",
+          actorId: principal.memberId,
+          subjectId: proposalId,
+          occurredAt: now()
+        });
+        await context.env.DB.batch([
+          context.env.DB
+            .prepare(
+              `INSERT INTO votes (proposal_id, member_id, choice, cast_at, member_signature)
+               VALUES (?, ?, ?, ?, ?)`
+            )
+            .bind(proposalId, item.memberId, item.choice, now(), item.memberSignature),
+          audit.statement
+        ]);
+      } catch {
+        return context.json({ error: "duplicate_vote" }, 409);
+      }
     } else {
       if (!memoryRepository.proposals.has(proposalId)) {
         return context.json({ error: "proposal_not_found" }, 404);
       }
-      memoryRepository.recordVote(proposalId, item);
+      if (!memoryRepository.recordVote(proposalId, item)) {
+        return context.json({ error: "duplicate_vote" }, 409);
+      }
     }
     return context.json({ proposalId, status: "recorded" });
   });
@@ -1134,10 +1345,10 @@ export function createApp(options: AppOptions = {}) {
     }
     if (!context.env?.DB) return context.json({ communityId, events: [] });
     const rows = await context.env.DB.prepare(
-      `SELECT sequence, event_kind AS eventKind, actor_id AS actorId,
+      `SELECT community_sequence AS sequence, event_kind AS eventKind, actor_id AS actorId,
               subject_id AS subjectId, occurred_at AS occurredAt,
               previous_event_hash AS previousEventHash, event_hash AS eventHash
-       FROM audit_events WHERE community_id = ? ORDER BY sequence`
+       FROM audit_events WHERE community_id = ? ORDER BY community_sequence`
     )
       .bind(communityId)
       .all();

@@ -168,6 +168,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "zeroize",
 ]
 
 [[package]]
@@ -232,8 +233,10 @@ version = "0.1.0"
 dependencies = [
  "arcane-mesh-core",
  "iroh",
+ "rusqlite",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.19",
  "tokio",
 ]

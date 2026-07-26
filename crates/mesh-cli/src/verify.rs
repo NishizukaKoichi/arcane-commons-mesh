@@ -1,5 +1,7 @@
 use anyhow::{bail, Context, Result};
-use arcane_mesh_control::{Community, LocalControlPlane, Member, Proposal, Vote, VoteChoice};
+use arcane_mesh_control::{
+    CatalogPointer, Community, LocalControlPlane, Member, Proposal, Vote, VoteChoice,
+};
 use arcane_mesh_core::{
     audit::{merkle_root, verify_chain},
     catalog::{
@@ -10,7 +12,7 @@ use arcane_mesh_core::{
     credit::{CreditEntry, CreditLedger, CreditReason},
     crypto::{decrypt, SecretKey},
     identity::{Identity, MembershipClaims},
-    recovery::{export, import, RecoveryPayload},
+    recovery::{export, import, RecoveryPayload, RecoveryVaultPointer},
     vault::{decrypt_stream, encrypt_stream},
 };
 use arcane_mesh_node::StorageNode;
@@ -133,6 +135,8 @@ pub fn verify_mvp() -> Result<()> {
         },
     )?)?;
     let catalog_cid = mesh.replicate(&catalog_blob, 5)?;
+    process_nodes.replicate(&manifest_cid, &manifest_blob, 5)?;
+    process_nodes.replicate(&catalog_cid, &catalog_blob, 5)?;
     if replicated_cid != object_cid || mesh.audit_all(&object_cid) != 3 {
         bail!("step 3: three-replica assertion failed");
     }
@@ -210,6 +214,10 @@ pub fn verify_mvp() -> Result<()> {
     if process_nodes.restore(&object_cid)? != blob {
         bail!("step 8: process-node corrupted replica fallback failed");
     }
+    process_nodes.repair(3, &object_cid, &[0, 1, 2])?;
+    if process_nodes.get(3, &object_cid)? != blob {
+        bail!("step 8: process-node repair did not materialize a healthy replacement");
+    }
     nodes[1].set_active(true);
     if mesh.repair(&object_cid, 3)? < 3 {
         bail!("step 8: repair did not restore target");
@@ -220,6 +228,16 @@ pub fn verify_mvp() -> Result<()> {
     );
 
     let (mut control, root, alice, alice_member) = control_plane()?;
+    let mut catalog_pointer = CatalogPointer {
+        vault_id: "vault-test".into(),
+        catalog_cid: catalog_cid.clone(),
+        version: 1,
+        previous_cid: None,
+        signed_at: 150,
+        owner_signature: Vec::new(),
+    };
+    catalog_pointer.owner_signature = alice.sign(&catalog_pointer.signing_bytes()).to_vec();
+    control.update_catalog_pointer(&alice.member_id(), catalog_pointer)?;
     let earned = CreditLedger::physical_storage_cost(blob.len() as u64, 1, 3600)?;
     control.record_credit(
         &alice.member_id(),
@@ -281,7 +299,10 @@ pub fn verify_mvp() -> Result<()> {
         },
         215,
     )?;
-    for (choice, cast_at) in [(VoteChoice::Yes, 230), (VoteChoice::No, 240)] {
+    for (index, (choice, cast_at)) in [(VoteChoice::Yes, 230), (VoteChoice::No, 240)]
+        .into_iter()
+        .enumerate()
+    {
         let mut vote = Vote {
             proposal_id: "proposal-one-person-one-vote".into(),
             member_id: bob.member_id(),
@@ -290,10 +311,14 @@ pub fn verify_mvp() -> Result<()> {
             member_signature: Vec::new(),
         };
         vote.member_signature = bob.sign(&vote.signing_bytes()).to_vec();
-        control.cast_vote(vote)?;
+        if index == 0 {
+            control.cast_vote(vote)?;
+        } else if control.cast_vote(vote).is_ok() {
+            bail!("step 12: duplicate vote was accepted");
+        }
     }
     let votes = control.vote_result("proposal-one-person-one-vote")?;
-    if (votes.yes, votes.no, control.vote_history_len()) != (0, 1, 2) {
+    if (votes.yes, votes.no, control.vote_history_len()) != (1, 0, 1) {
         bail!("step 12: duplicate vote counted twice or history lost");
     }
     if alice_member.roles != vec!["member", "admin"] {
@@ -307,6 +332,12 @@ pub fn verify_mvp() -> Result<()> {
             vault_master_key: vault_master_key.0,
             community_ids: vec!["local-community".into()],
             control_plane_urls: vec!["http://127.0.0.1:8787".into()],
+            vaults: vec![RecoveryVaultPointer {
+                vault_id: "vault-test".into(),
+                catalog_cid: catalog_cid.clone(),
+                catalog_version: 1,
+                owner_public_key: owner.public_key(),
+            }],
         },
         b"local verification passphrase",
     )?;
@@ -317,13 +348,20 @@ pub fn verify_mvp() -> Result<()> {
     }
     let recovered = import(&fs::read(&kit_path)?, b"local verification passphrase")?;
     let recovered_master_key = SecretKey(recovered.vault_master_key);
-    let recovered_owner = Identity::from_seed(recovered.identity_seed);
+    let pointer = recovered
+        .vaults
+        .first()
+        .context("step 13: Recovery Kit contains no vault pointer")?;
+    let control_pointer = control.catalog_pointer(&pointer.vault_id)?;
+    if control_pointer.version < pointer.catalog_version {
+        bail!("step 13: control plane returned an older catalog pointer");
+    }
     let recovered_catalog = decrypt_and_verify_catalog(
         &recovered_master_key,
-        "vault-test",
-        1,
-        &recovered_owner.public_key(),
-        &serde_json::from_slice(&mesh.restore(&catalog_cid)?)?,
+        &control_pointer.vault_id,
+        control_pointer.version,
+        &pointer.owner_public_key,
+        &serde_json::from_slice(&process_nodes.restore(&control_pointer.catalog_cid)?)?,
     )?;
     let recovered_version = recovered_catalog
         .catalog
@@ -332,17 +370,19 @@ pub fn verify_mvp() -> Result<()> {
         .context("step 13: recovered catalog contains no files")?;
     let recovered_manifest = decrypt_manifest(
         &recovered_master_key,
-        "vault-test",
+        &pointer.vault_id,
         &recovered_version.file_id,
         &recovered_version.file_version_id,
-        &serde_json::from_slice(&mesh.restore(&recovered_version.encrypted_manifest_cid)?)?,
+        &serde_json::from_slice(
+            &process_nodes.restore(&recovered_version.encrypted_manifest_cid)?,
+        )?,
     )?;
     let recovered_chunks = recovered_manifest
         .ordered_chunk_cids
         .iter()
         .enumerate()
         .map(|(index, chunk_cid)| {
-            let envelope = serde_json::from_slice(&mesh.restore(chunk_cid)?)?;
+            let envelope = serde_json::from_slice(&process_nodes.restore(chunk_cid)?)?;
             Ok(arcane_mesh_core::vault::EncryptedChunk {
                 index: index as u64,
                 plaintext_length: recovered_manifest.chunk_plaintext_lengths[index],
@@ -356,7 +396,7 @@ pub fn verify_mvp() -> Result<()> {
         &recovered_chunks,
         &mut recovered_plaintext,
         &SecretKey(recovered_manifest.file_key),
-        "vault-test",
+        &pointer.vault_id,
         &recovered_version.file_version_id,
     )?;
     if recovered.identity_seed != [11; 32] || recovered_plaintext != CONTENT_SENTINEL {
@@ -366,6 +406,10 @@ pub fn verify_mvp() -> Result<()> {
 
     scan_tree_absent(&node_root, FILE_NAME_SENTINEL.as_bytes())?;
     scan_tree_absent(&node_root, CONTENT_SENTINEL)?;
+    for root in &process_nodes.roots {
+        scan_tree_absent(root, FILE_NAME_SENTINEL.as_bytes())?;
+        scan_tree_absent(root, CONTENT_SENTINEL)?;
+    }
     let migration_lower = MIGRATION.to_ascii_lowercase();
     for forbidden_column in [
         "file_name",
@@ -435,7 +479,7 @@ pub fn verify_mvp() -> Result<()> {
 
 fn control_plane() -> Result<(LocalControlPlane, Identity, Identity, Member)> {
     let root = Identity::from_seed([1; 32]);
-    let alice = Identity::from_seed([2; 32]);
+    let alice = Identity::from_seed([11; 32]);
     let alice_member = member(&root, &alice, 1, &["member", "admin"]);
     let control = LocalControlPlane::bootstrap(
         Community {
@@ -519,13 +563,23 @@ struct ProcessNodes {
     roots: Vec<PathBuf>,
 }
 
+const PROCESS_NODE_NAMES: [&str; 7] = [
+    "storage-a",
+    "storage-b",
+    "storage-c",
+    "storage-d",
+    "storage-e",
+    "storage-f",
+    "auditor",
+];
+
 impl ProcessNodes {
     fn start(root: PathBuf) -> Result<Self> {
         fs::create_dir_all(&root)?;
         let executable = std::env::current_exe()?;
         let mut children = Vec::new();
         let mut roots = Vec::new();
-        for name in ["storage-a", "storage-b", "storage-c", "auditor"] {
+        for name in PROCESS_NODE_NAMES {
             let node_root = root.join(name);
             fs::create_dir_all(&node_root)?;
             roots.push(node_root.clone());
@@ -541,7 +595,7 @@ impl ProcessNodes {
             ));
         }
         for _ in 0..50 {
-            if ["storage-a", "storage-b", "storage-c", "auditor"]
+            if PROCESS_NODE_NAMES
                 .iter()
                 .all(|name| root.join(name).join("ready").exists())
             {
@@ -615,6 +669,74 @@ impl ProcessNodes {
             }
         }
         bail!("no healthy process-node replica")
+    }
+
+    fn get(&self, index: usize, object_cid: &str) -> Result<Vec<u8>> {
+        let request_root = self.roots[index].join("ipc").join("requests");
+        let response_root = self.roots[index].join("ipc").join("responses");
+        fs::create_dir_all(&request_root)?;
+        fs::create_dir_all(&response_root)?;
+        let response = response_root.join(format!("get-{object_cid}.blob"));
+        let error = response_root.join(format!("get-{object_cid}.err"));
+        fs::write(request_root.join(format!("get-{object_cid}.req")), b"")?;
+        wait_for_path(&response, &error)?;
+        let bytes = fs::read(&response)?;
+        fs::remove_file(response)?;
+        if cid(&bytes) != object_cid {
+            bail!("process-node GET returned CID mismatch");
+        }
+        Ok(bytes)
+    }
+
+    fn repair(&self, destination: usize, object_cid: &str, sources: &[usize]) -> Result<()> {
+        #[derive(serde::Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct RepairTask<'a> {
+            task_id: String,
+            object_cid: &'a str,
+            challenge: String,
+            source_roots: Vec<PathBuf>,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct RepairReceipt {
+            task_id: String,
+            object_cid: String,
+            challenge: String,
+            source_node: String,
+        }
+        let request_root = self.roots[destination].join("ipc").join("requests");
+        let response_root = self.roots[destination].join("ipc").join("responses");
+        fs::create_dir_all(&request_root)?;
+        fs::create_dir_all(&response_root)?;
+        let task_id = format!("repair-process-{object_cid}-{destination}");
+        let challenge = format!("challenge-process-{object_cid}");
+        let task = RepairTask {
+            task_id: task_id.clone(),
+            object_cid,
+            challenge: challenge.clone(),
+            source_roots: sources
+                .iter()
+                .map(|index| self.roots[*index].clone())
+                .collect(),
+        };
+        let response = response_root.join(format!("repair-{object_cid}.json"));
+        let error = response_root.join(format!("repair-{object_cid}.err"));
+        fs::write(
+            request_root.join(format!("repair-{object_cid}.json")),
+            serde_json::to_vec(&task)?,
+        )?;
+        wait_for_path(&response, &error)?;
+        let receipt: RepairReceipt = serde_json::from_slice(&fs::read(&response)?)?;
+        fs::remove_file(response)?;
+        if receipt.task_id != task_id
+            || receipt.object_cid != object_cid
+            || receipt.challenge != challenge
+            || receipt.source_node.is_empty()
+        {
+            bail!("process-node repair receipt was not bound to its task");
+        }
+        Ok(())
     }
 
     fn stop(&mut self, index: usize) -> Result<()> {

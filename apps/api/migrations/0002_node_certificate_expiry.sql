@@ -1,0 +1,2 @@
+ALTER TABLE nodes ADD COLUMN certificate_issued_at INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE nodes ADD COLUMN certificate_expires_at INTEGER NOT NULL DEFAULT 0;

@@ -42,7 +42,14 @@ export class MemoryRepository implements AuthRepository {
   readonly sessions = new Map<string, SessionPrincipal & { tokenHash: string; revokedAt?: number }>();
   readonly members = new Map<
     string,
-    { communityId: string; publicKey: string; roles: string[]; status: string }
+    {
+      communityId: string;
+      publicKey: string;
+      roles: string[];
+      status: string;
+      credentialIssuedAt: number;
+      credentialExpiresAt: number;
+    }
   >();
   readonly votes = new Map<string, Map<string, Vote>>();
   readonly voteHistory: Array<Vote & { proposalId: string }> = [];
@@ -54,12 +61,16 @@ export class MemoryRepository implements AuthRepository {
     publicKey: string;
     roles: string[];
     status?: string;
+    credentialIssuedAt?: number;
+    credentialExpiresAt?: number;
   }): void {
     this.members.set(input.memberId, {
       communityId: input.communityId,
       publicKey: input.publicKey,
       roles: input.roles,
-      status: input.status ?? "active"
+      status: input.status ?? "active",
+      credentialIssuedAt: input.credentialIssuedAt ?? 0,
+      credentialExpiresAt: input.credentialExpiresAt ?? Number.MAX_SAFE_INTEGER
     });
   }
 
@@ -95,6 +106,8 @@ export class MemoryRepository implements AuthRepository {
       this.replayNonces.has(input.replayNonceHash) ||
       !member ||
       member.status !== "active" ||
+      member.credentialIssuedAt > input.now ||
+      member.credentialExpiresAt <= input.now ||
       member.publicKey !== input.publicKey
     ) {
       return undefined;
@@ -117,7 +130,16 @@ export class MemoryRepository implements AuthRepository {
     const session = [...this.sessions.values()].find(
       (item) => item.tokenHash === tokenHash && !item.revokedAt && item.expiresAt >= now
     );
-    if (!session || this.members.get(session.memberId)?.status !== "active") return undefined;
+    const member = session ? this.members.get(session.memberId) : undefined;
+    if (
+      !session ||
+      !member ||
+      member.status !== "active" ||
+      member.credentialIssuedAt > now ||
+      member.credentialExpiresAt <= now
+    ) {
+      return undefined;
+    }
     return session;
   }
 
@@ -126,14 +148,16 @@ export class MemoryRepository implements AuthRepository {
     if (session) session.revokedAt = now;
   }
 
-  recordVote(proposalId: string, vote: Vote): void {
+  recordVote(proposalId: string, vote: Vote): boolean {
     let votes = this.votes.get(proposalId);
     if (!votes) {
       votes = new Map();
       this.votes.set(proposalId, votes);
     }
+    if (votes.has(vote.memberId)) return false;
     votes.set(vote.memberId, vote);
     this.voteHistory.push({ proposalId, ...vote });
+    return true;
   }
 }
 
@@ -200,9 +224,15 @@ export class D1Repository implements AuthRepository {
     const member = await this.db
       .prepare(
         `SELECT member_id, community_id, public_key, roles_json
-         FROM members WHERE member_id = ? AND public_key = ? AND status = 'active'`
+         FROM members
+         WHERE member_id = ? AND public_key = ? AND status = 'active'
+           AND EXISTS (
+             SELECT 1 FROM membership_credentials c
+             WHERE c.member_id = members.member_id
+               AND c.issued_at <= ? AND c.expires_at > ? AND c.revoked_at IS NULL
+           )`
       )
-      .bind(input.memberId, input.publicKey)
+      .bind(input.memberId, input.publicKey, input.now, input.now)
       .first<{
         member_id: string;
         community_id: string;
@@ -254,9 +284,14 @@ export class D1Repository implements AuthRepository {
         `SELECT s.session_id, s.member_id, m.community_id, m.public_key, m.roles_json, s.expires_at
          FROM sessions s JOIN members m ON m.member_id = s.member_id
          WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at >= ?
-           AND m.status = 'active'`
+           AND m.status = 'active'
+           AND EXISTS (
+             SELECT 1 FROM membership_credentials c
+             WHERE c.member_id = m.member_id
+               AND c.issued_at <= ? AND c.expires_at > ? AND c.revoked_at IS NULL
+           )`
       )
-      .bind(tokenHash, now)
+      .bind(tokenHash, now, now, now)
       .first<D1PrincipalRow>();
     return row
       ? {

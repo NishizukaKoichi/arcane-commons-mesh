@@ -31,6 +31,24 @@ struct ProcessRecord {
     pid: u32,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProcessRepairTask {
+    task_id: String,
+    object_cid: String,
+    challenge: String,
+    source_roots: Vec<PathBuf>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProcessRepairReceipt {
+    task_id: String,
+    object_cid: String,
+    challenge: String,
+    source_node: String,
+}
+
 #[derive(Parser)]
 #[command(name = "acmctl", version, about = "Arcane Commons Mesh local MVP")]
 struct Cli {
@@ -75,8 +93,14 @@ enum IdentityCommand {
 
 #[derive(Subcommand)]
 enum RecoveryCommand {
-    Export { output: PathBuf },
-    Import { input: PathBuf },
+    Export {
+        output: PathBuf,
+    },
+    Import {
+        input: PathBuf,
+        #[arg(long = "source")]
+        sources: Vec<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -91,10 +115,23 @@ enum CommunityCommand {
 #[derive(Subcommand)]
 enum VaultCommand {
     Create,
-    Add { path: PathBuf },
+    Recover {
+        recovery: PathBuf,
+        #[arg(long = "source", required = true)]
+        sources: Vec<PathBuf>,
+    },
+    Add {
+        path: PathBuf,
+    },
     List,
-    Restore { file_id: String, output: PathBuf },
-    Delete { file_id: String },
+    Restore {
+        file_id: String,
+        output: PathBuf,
+    },
+    Delete {
+        file_id: String,
+    },
+    Gc,
     Verify,
 }
 
@@ -164,6 +201,7 @@ fn recovery(command: RecoveryCommand) -> Result<()> {
                     vault_master_key,
                     community_ids: Vec::new(),
                     control_plane_urls: vec!["http://127.0.0.1:8787".into()],
+                    vaults: Vec::new(),
                 },
                 passphrase.trim_end().as_bytes(),
             )?;
@@ -171,8 +209,11 @@ fn recovery(command: RecoveryCommand) -> Result<()> {
             println!("Recovery Kit written to {}", output.display());
             Ok(())
         }
-        RecoveryCommand::Import { input } => {
+        RecoveryCommand::Import { input, sources } => {
             let passphrase = read_passphrase_stdin()?;
+            if !sources.is_empty() {
+                return local_vault::recover(&input, &sources, passphrase.trim_end());
+            }
             let kit = fs::read(&input)?;
             let recovered = import(&kit, passphrase.trim_end().as_bytes())?;
             println!("format=valid");
@@ -216,12 +257,16 @@ fn vault(command: VaultCommand) -> Result<()> {
     let passphrase = read_passphrase_stdin()?;
     match command {
         VaultCommand::Create => local_vault::create(passphrase.trim_end()),
+        VaultCommand::Recover { recovery, sources } => {
+            local_vault::recover(&recovery, &sources, passphrase.trim_end())
+        }
         VaultCommand::Add { path } => local_vault::add(&path, passphrase.trim_end()),
         VaultCommand::List => local_vault::list(passphrase.trim_end()),
         VaultCommand::Restore { file_id, output } => {
             local_vault::restore(&file_id, &output, passphrase.trim_end())
         }
         VaultCommand::Delete { file_id } => local_vault::delete(&file_id, passphrase.trim_end()),
+        VaultCommand::Gc => local_vault::gc(passphrase.trim_end()),
         VaultCommand::Verify => local_vault::verify(passphrase.trim_end()),
     }
 }
@@ -553,6 +598,45 @@ fn service_node_requests(node: &StorageNode, root: &Path) -> Result<()> {
                 Ok(bytes) => fs::write(responses.join(format!("get-{object_cid}.blob")), bytes)?,
                 Err(_) => fs::write(responses.join(format!("get-{object_cid}.err")), b"")?,
             }
+            fs::remove_file(path)?;
+        } else if name.starts_with("repair-") && name.ends_with(".json") {
+            let task: ProcessRepairTask = serde_json::from_slice(&fs::read(&path)?)?;
+            let response_object_cid = task.object_cid.clone();
+            let result = (|| -> Result<ProcessRepairReceipt> {
+                if task.task_id.len() < 16 || task.challenge.len() < 16 {
+                    bail!("invalid repair task binding");
+                }
+                for (index, source_root) in task.source_roots.iter().enumerate() {
+                    let source = StorageNode::new(
+                        format!("repair-source-{index}"),
+                        format!("repair-source-domain-{index}"),
+                        source_root,
+                        u64::MAX,
+                    )?;
+                    if let Ok(bytes) = source.get(&task.object_cid) {
+                        node.put(&task.object_cid, &bytes)?;
+                        if node.get(&task.object_cid)? != bytes {
+                            bail!("repair destination verification failed");
+                        }
+                        return Ok(ProcessRepairReceipt {
+                            task_id: task.task_id,
+                            object_cid: task.object_cid,
+                            challenge: task.challenge,
+                            source_node: source.node_id().to_owned(),
+                        });
+                    }
+                }
+                bail!("no healthy repair source")
+            })();
+            let response_name = match &result {
+                Ok(_) => format!("repair-{response_object_cid}.json"),
+                Err(_) => format!("repair-{response_object_cid}.err"),
+            };
+            let response_bytes = match result {
+                Ok(receipt) => serde_json::to_vec(&receipt)?,
+                Err(error) => error.to_string().into_bytes(),
+            };
+            fs::write(responses.join(response_name), response_bytes)?;
             fs::remove_file(path)?;
         } else if !name.starts_with('.') {
             fs::remove_file(path)?;

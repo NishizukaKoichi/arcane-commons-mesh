@@ -10,17 +10,19 @@ Implemented command surface:
 acmctl doctor
 acmctl identity create
 acmctl recovery export <output>
-acmctl recovery import <input>
+acmctl recovery import <input> [--source <node-root> ...]
 acmctl community create
 acmctl community join-request
 acmctl community approve-member
 acmctl community export-snapshot <output>
 acmctl community verify-snapshot <input>
 acmctl vault create
+acmctl vault recover <recovery> --source <node-root> ...
 acmctl vault add <path>
 acmctl vault list
 acmctl vault restore <file-id> <output>
 acmctl vault delete <file-id>
+acmctl vault gc
 acmctl vault verify
 acmctl node init <root>
 acmctl node run <root>
@@ -33,12 +35,18 @@ acmctl verify-mvp
 
 Vault commands read the recovery passphrase from standard input, decrypt the local
 Recovery Kit, and operate on encrypted catalog, manifest, and chunk replicas.
-Normal delete writes a 30-day tombstone; encrypted blobs may remain until later GC.
+Recovery with source roots rebuilds a clean local vault and discovers a newer
+contiguous signed catalog chain when the external Kit contains an older
+checkpoint.
+Normal delete writes a 30-day tombstone and remains restorable during retention.
+`vault gc` removes expired manifest/chunk replicas and advances the signed
+encrypted catalog.
 Commands that need initialized identity/catalog/control-plane state fail closed.
 `node init` requires a new or empty
 dedicated directory. It never scans the home directory or follows an arbitrary
 remote path.
 
-`verify-mvp` uses an isolated temporary owner, four local node roots, a clean
-recovery root, and the in-memory offline transport. It writes a machine-readable
-summary to `.verify/verify-mvp-report.json`, which is ignored by Git.
+`verify-mvp` uses an isolated temporary owner, real storage-node child processes
+for data and recovery metadata, six in-memory failure domains for model checks, a
+clean recovery root, and an offline transport. It writes a machine-readable summary to
+`.verify/verify-mvp-report.json`, which is ignored by Git.

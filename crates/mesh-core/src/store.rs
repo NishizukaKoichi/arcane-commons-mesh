@@ -162,6 +162,13 @@ impl ObjectStore {
         Ok(u64::try_from(total).unwrap_or(u64::MAX))
     }
 
+    pub fn list_cids(&self) -> Result<Vec<String>, StoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare("SELECT cid FROM objects ORDER BY cid")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
     pub fn put(&self, expected_cid: &str, bytes: &[u8]) -> Result<PathBuf, StoreError> {
         if cid(bytes) != expected_cid {
             return Err(StoreError::CidMismatch);
@@ -208,12 +215,51 @@ impl ObjectStore {
         if let Ok(directory) = OpenOptions::new().read(true).open(parent) {
             directory.sync_all()?;
         }
-        transaction.execute(
+        if let Err(error) = transaction.execute(
             "INSERT INTO objects (cid, size_bytes) VALUES (?1, ?2)",
             params![expected_cid, i64::try_from(bytes.len()).unwrap_or(i64::MAX)],
-        )?;
-        transaction.commit()?;
+        ) {
+            drop(transaction);
+            let _ = fs::remove_file(&destination);
+            return Err(StoreError::Database(error));
+        }
+        if let Err(error) = transaction.commit() {
+            let _ = fs::remove_file(&destination);
+            self.reconcile()?;
+            return Err(StoreError::Database(error));
+        }
         Ok(destination)
+    }
+
+    pub fn delete(&self, object_cid: &str) -> Result<bool, StoreError> {
+        let destination = self.path(object_cid)?;
+        self.reject_symlink_components(&destination)?;
+        if !destination.exists() {
+            self.connection()?
+                .execute("DELETE FROM objects WHERE cid = ?1", [object_cid])?;
+            return Ok(false);
+        }
+        let tombstone = destination.with_extension("gc");
+        fs::rename(&destination, &tombstone)?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Err(error) = transaction.execute("DELETE FROM objects WHERE cid = ?1", [object_cid])
+        {
+            drop(transaction);
+            fs::rename(&tombstone, &destination)?;
+            return Err(StoreError::Database(error));
+        }
+        if let Err(error) = transaction.commit() {
+            fs::rename(&tombstone, &destination)?;
+            return Err(StoreError::Database(error));
+        }
+        fs::remove_file(tombstone)?;
+        if let Some(parent) = destination.parent() {
+            if let Ok(directory) = OpenOptions::new().read(true).open(parent) {
+                directory.sync_all()?;
+            }
+        }
+        Ok(true)
     }
 
     pub fn get(&self, object_cid: &str) -> Result<Vec<u8>, StoreError> {
@@ -305,5 +351,18 @@ mod tests {
         assert!(!partial.exists());
         assert_eq!(recovered.get(&object_cid).unwrap(), bytes);
         assert_eq!(recovered.used_bytes().unwrap(), bytes.len() as u64);
+    }
+
+    #[test]
+    fn delete_removes_blob_and_quota_accounting() {
+        let temp = tempfile::tempdir().unwrap();
+        let bytes = b"opaque ciphertext";
+        let object_cid = cid(bytes);
+        let store = ObjectStore::new(temp.path(), 64).unwrap();
+        store.put(&object_cid, bytes).unwrap();
+        assert!(store.delete(&object_cid).unwrap());
+        assert_eq!(store.used_bytes().unwrap(), 0);
+        assert!(store.get(&object_cid).is_err());
+        assert!(!store.delete(&object_cid).unwrap());
     }
 }

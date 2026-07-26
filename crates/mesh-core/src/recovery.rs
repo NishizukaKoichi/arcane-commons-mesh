@@ -25,6 +25,16 @@ pub struct RecoveryPayload {
     pub vault_master_key: [u8; 32],
     pub community_ids: Vec<String>,
     pub control_plane_urls: Vec<String>,
+    #[serde(default)]
+    pub vaults: Vec<RecoveryVaultPointer>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecoveryVaultPointer {
+    pub vault_id: String,
+    pub catalog_cid: String,
+    pub catalog_version: u64,
+    pub owner_public_key: [u8; 32],
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -119,6 +129,12 @@ mod tests {
             vault_master_key: [9; 32],
             community_ids: vec!["community-test".into()],
             control_plane_urls: vec!["http://127.0.0.1:8787".into()],
+            vaults: vec![RecoveryVaultPointer {
+                vault_id: "vault-test".into(),
+                catalog_cid: "b3:test".into(),
+                catalog_version: 7,
+                owner_public_key: [3; 32],
+            }],
         }
     }
 
@@ -127,6 +143,7 @@ mod tests {
         let encoded = export(&fixture(), b"correct horse battery staple").unwrap();
         let decoded = import(&encoded, b"correct horse battery staple").unwrap();
         assert_eq!(decoded.identity_seed, [7; 32]);
+        assert_eq!(decoded.vaults[0].catalog_version, 7);
         assert!(import(&encoded, b"wrong passphrase").is_err());
 
         let mut corrupt = encoded;

@@ -22,6 +22,9 @@ export const community = z.object({
   founderMemberId: opaqueId,
   founderPublicKey: publicKey,
   founderRoles: z.array(z.enum(["member", "admin", "auditor"])).min(1).max(3),
+  founderCredentialSerial: z.number().int().nonnegative(),
+  founderCredentialExpiresAt: z.number().int(),
+  founderCredentialSignature: z.string().min(80).max(128),
   rootSignature: z.string().min(80).max(128)
 });
 
@@ -47,7 +50,7 @@ export const membershipApproval = z.object({
   memberId: opaqueId,
   memberPublicKey: publicKey,
   roles: z.array(z.enum(["member", "admin", "auditor"])).min(1).max(3),
-  serial: opaqueId,
+  serial: z.number().int().nonnegative(),
   issuedAt: z.number().int(),
   expiresAt: z.number().int(),
   rootSignature: z.string().min(80).max(128)
@@ -61,12 +64,20 @@ export const heartbeat = z.object({
 export const placement = z.object({
   placementId: opaqueId,
   nodeId: opaqueId,
-  createdAt: z.number().int()
+  createdAt: z.number().int(),
+  ciphertextBase64: z.string().min(1).max(8_000_000),
+  nodeSignature: z.string().min(80).max(128)
+});
+
+export const taskProof = z.object({
+  storedAt: z.number().int(),
+  ciphertextBase64: z.string().min(1).max(8_000_000),
+  nodeSignature: z.string().min(80).max(128)
 });
 
 export const objectRecord = z.object({
   cid,
-  ciphertextSize: z.number().int().positive(),
+  ciphertextSize: z.number().int().positive().max(4 * 1024 * 1024 + 128 * 1024),
   objectKind: z.enum(["data_chunk", "encrypted_manifest", "encrypted_catalog"]),
   replicaTarget: z.number().int().min(1).max(9)
 });
