@@ -1,11 +1,52 @@
 import { generateKeyPairSync, sign, type KeyObject } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app";
-import { fromBase64Url, MemoryRepository, toBase64Url } from "../src/repository";
+import {
+  fromBase64Url,
+  hashOpaque,
+  MemoryRepository,
+  toBase64Url
+} from "../src/repository";
 
 function rawPublicKey(key: KeyObject): Uint8Array {
   const der = key.export({ type: "spki", format: "der" });
   return new Uint8Array(der.subarray(der.length - 32));
+}
+
+async function login(
+  app: ReturnType<typeof createApp>["app"],
+  repository: MemoryRepository,
+  now = 100
+): Promise<{ token: string; privateKey: KeyObject }> {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const encodedPublicKey = toBase64Url(rawPublicKey(publicKey));
+  repository.addMember({
+    memberId: "member-a",
+    communityId: "community-a",
+    publicKey: encodedPublicKey,
+    roles: ["member", "admin"]
+  });
+  const challengeResponse = await app.request("/v1/auth/challenges", { method: "POST" });
+  const challenge = await challengeResponse.json<{ challengeId: string; challenge: string }>();
+  const replayNonce = `nonce-${now.toString().padStart(12, "0")}`;
+  const message = `acm.auth.v1|${challenge.challengeId}|${challenge.challenge}|${replayNonce}|member-a|${encodedPublicKey}`;
+  const response = await app.request("/v1/auth/sessions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      challengeId: challenge.challengeId,
+      challenge: challenge.challenge,
+      memberId: "member-a",
+      publicKey: encodedPublicKey,
+      signature: toBase64Url(sign(null, Buffer.from(message), privateKey)),
+      replayNonce
+    })
+  });
+  expect(response.status).toBe(200);
+  return {
+    token: (await response.json<{ sessionToken: string }>()).sessionToken,
+    privateKey
+  };
 }
 
 describe("control plane API", () => {
@@ -19,13 +60,21 @@ describe("control plane API", () => {
       challenge: string;
     }>();
     const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    const encodedPublicKey = toBase64Url(rawPublicKey(publicKey));
+    repository.addMember({
+      memberId: "member-a",
+      communityId: "community-a",
+      publicKey: encodedPublicKey,
+      roles: ["member"]
+    });
     const replayNonce = "nonce-0000000001";
-    const message = `acm.auth.v1|${challenge.challengeId}|${challenge.challenge}|${replayNonce}`;
+    const message = `acm.auth.v1|${challenge.challengeId}|${challenge.challenge}|${replayNonce}|member-a|${encodedPublicKey}`;
     const signature = sign(null, Buffer.from(message), privateKey);
     const body = JSON.stringify({
       challengeId: challenge.challengeId,
+      challenge: challenge.challenge,
       memberId: "member-a",
-      publicKey: toBase64Url(rawPublicKey(publicKey)),
+      publicKey: encodedPublicKey,
       signature: toBase64Url(signature),
       replayNonce
     });
@@ -48,35 +97,134 @@ describe("control plane API", () => {
   it("rejects expired challenges", async () => {
     let now = 100;
     const repository = new MemoryRepository();
-    const challenge = repository.createChallenge(now);
+    const challenge = await repository.createChallenge(await hashOpaque("challenge"), now);
     now = 401;
-    expect(repository.consumeChallenge(challenge.id, "nonce-0000000001", now)).toBeUndefined();
+    expect(
+      await repository.consumeChallengeAndCreateSession({
+        challengeId: challenge.id,
+        replayNonceHash: await hashOpaque("nonce-0000000001"),
+        memberId: "member-a",
+        publicKey: "x",
+        tokenHash: await hashOpaque("token"),
+        now
+      })
+    ).toBeUndefined();
+  });
+
+  it("requires a session and prevents cross-community reads", async () => {
+    const repository = new MemoryRepository();
+    const { app } = createApp({ repository, now: () => 100 });
+    expect((await app.request("/v1/communities/community-a")).status).toBe(401);
+    const { token } = await login(app, repository);
+    expect(
+      (
+        await app.request("/v1/communities/community-b", {
+          headers: { authorization: `Bearer ${token}` }
+        })
+      ).status
+    ).toBe(403);
+  });
+
+  it("does not consume a challenge when its signature is invalid", async () => {
+    const repository = new MemoryRepository();
+    const { app } = createApp({ repository, now: () => 100 });
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    const encodedPublicKey = toBase64Url(rawPublicKey(publicKey));
+    repository.addMember({
+      memberId: "member-a",
+      communityId: "community-a",
+      publicKey: encodedPublicKey,
+      roles: ["member"]
+    });
+    const challengeResponse = await app.request("/v1/auth/challenges", { method: "POST" });
+    const challenge = await challengeResponse.json<{
+      challengeId: string;
+      challenge: string;
+    }>();
+    const replayNonce = "nonce-0000000002";
+    const request = {
+      challengeId: challenge.challengeId,
+      challenge: challenge.challenge,
+      memberId: "member-a",
+      publicKey: encodedPublicKey,
+      replayNonce
+    };
+    const invalid = await app.request("/v1/auth/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...request, signature: toBase64Url(new Uint8Array(64)) })
+    });
+    expect(invalid.status).toBe(401);
+
+    const message = `acm.auth.v1|${challenge.challengeId}|${challenge.challenge}|${replayNonce}|member-a|${encodedPublicKey}`;
+    const valid = await app.request("/v1/auth/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...request,
+        signature: toBase64Url(sign(null, Buffer.from(message), privateKey))
+      })
+    });
+    expect(valid.status).toBe(200);
   });
 
   it("counts only the latest vote for one member and keeps both history events", async () => {
     const repository = new MemoryRepository();
     const { app } = createApp({ repository, now: () => 100 });
+    const { token, privateKey } = await login(app, repository);
     repository.proposals.add("proposal-a");
     for (const choice of ["yes", "no"] as const) {
+      const castAt = 100;
+      const canonicalChoice = choice.charAt(0).toUpperCase() + choice.slice(1);
+      const voteMessage = `acm.vote.v1|proposal-a|member-a|${canonicalChoice}|${castAt}`;
       const response = await app.request("/v1/proposals/proposal-a/vote", {
         method: "PUT",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`
+        },
         body: JSON.stringify({
           memberId: "member-a",
           choice,
-          castAt: 100,
-          memberSignature: "s".repeat(80)
+          castAt,
+          memberSignature: toBase64Url(sign(null, Buffer.from(voteMessage), privateKey))
         })
       });
       expect(response.status).toBe(200);
     }
-    const result = await app.request("/v1/proposals/proposal-a/result");
+    const result = await app.request("/v1/proposals/proposal-a/result", {
+      headers: { authorization: `Bearer ${token}` }
+    });
     expect(await result.json()).toEqual({ yes: 0, no: 1, abstain: 0 });
     expect(repository.voteHistory).toHaveLength(2);
   });
 
+  it("rejects a vote with a forged member signature", async () => {
+    const repository = new MemoryRepository();
+    const { app } = createApp({ repository, now: () => 100 });
+    const { token } = await login(app, repository);
+    repository.proposals.add("proposal-a");
+    const response = await app.request("/v1/proposals/proposal-a/vote", {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        memberId: "member-a",
+        choice: "yes",
+        castAt: 100,
+        memberSignature: toBase64Url(new Uint8Array(64))
+      })
+    });
+    expect(response.status).toBe(401);
+    expect(repository.voteHistory).toHaveLength(0);
+  });
+
   it("has no credit transfer, purchase, sale, exchange, or token routes", async () => {
-    const { app } = createApp();
+    const repository = new MemoryRepository();
+    const { app } = createApp({ repository });
+    const { token } = await login(app, repository, 101);
     for (const path of [
       "/v1/credits/transfer",
       "/v1/credits/buy",
@@ -85,7 +233,10 @@ describe("control plane API", () => {
       "/v1/tokens",
       "/v1/wallet"
     ]) {
-      const response = await app.request(path, { method: "POST" });
+      const response = await app.request(path, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` }
+      });
       expect(response.status, path).toBe(404);
     }
   });

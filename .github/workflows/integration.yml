@@ -28,6 +28,8 @@ jobs:
           toolchain: 1.91.0
       - uses: Swatinem/rust-cache@401aff9a7a08acb9d27b64936a90db81024cff97 # v2.8.2
       - run: pnpm install --frozen-lockfile
+      - name: Verify local D1 persistence and authentication
+        run: pnpm --filter @arcane-commons/api test:d1
       - name: Run isolated three-node verification
         run: pnpm verify:mvp
       - name: Upload non-secret diagnostic evidence on failure

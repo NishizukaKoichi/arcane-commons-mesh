@@ -12,7 +12,7 @@
     "format:check": "cargo fmt --all -- --check",
     "typecheck": "pnpm --filter @arcane-commons/api typecheck && pnpm --filter @arcane-commons/desktop typecheck && pnpm --filter @arcane-commons/site typecheck && cargo check --workspace --all-features",
     "test": "pnpm --filter @arcane-commons/api test && pnpm --filter @arcane-commons/desktop test && pnpm --filter @arcane-commons/site test && cargo test --workspace --all-features",
-    "test:integration": "cargo run -p arcane-mesh-cli -- verify-mvp",
+    "test:integration": "pnpm --filter @arcane-commons/api test:d1 && cargo run -p arcane-mesh-cli -- verify-mvp",
     "build": "pnpm --filter @arcane-commons/api build && pnpm --filter @arcane-commons/desktop build && pnpm --filter @arcane-commons/site build && cargo build --workspace --all-features",
     "demo:up": "cargo run -p arcane-mesh-cli -- demo up",
     "demo:down": "cargo run -p arcane-mesh-cli -- demo down",

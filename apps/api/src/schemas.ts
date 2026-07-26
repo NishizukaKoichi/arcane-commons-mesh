@@ -6,6 +6,7 @@ export const opaqueId = z.string().min(3).max(128);
 
 export const challengeSession = z.object({
   challengeId: opaqueId,
+  challenge: z.string().min(40).max(128),
   memberId: opaqueId,
   publicKey,
   signature: z.string().min(80).max(128),
@@ -17,7 +18,11 @@ export const community = z.object({
   name: z.string().min(1).max(100),
   rootPublicKey: publicKey,
   createdAt: z.number().int(),
-  policyVersion: z.number().int().positive()
+  policyVersion: z.number().int().positive(),
+  founderMemberId: opaqueId,
+  founderPublicKey: publicKey,
+  founderRoles: z.array(z.enum(["member", "admin", "auditor"])).min(1).max(3),
+  rootSignature: z.string().min(80).max(128)
 });
 
 export const node = z.object({
@@ -27,7 +32,36 @@ export const node = z.object({
   endpointPublicKey: publicKey,
   failureDomain: z.string().min(1).max(128),
   region: z.string().min(1).max(64),
-  maxStorageBytes: z.number().int().positive()
+  maxStorageBytes: z.number().int().positive(),
+  certificateSignature: z.string().min(80).max(128),
+  issuedAt: z.number().int(),
+  expiresAt: z.number().int()
+});
+
+export const joinRequest = z.object({
+  inviteCode: z.string().min(20).max(256),
+  memberPublicKey: publicKey
+});
+
+export const membershipApproval = z.object({
+  memberId: opaqueId,
+  memberPublicKey: publicKey,
+  roles: z.array(z.enum(["member", "admin", "auditor"])).min(1).max(3),
+  serial: opaqueId,
+  issuedAt: z.number().int(),
+  expiresAt: z.number().int(),
+  rootSignature: z.string().min(80).max(128)
+});
+
+export const heartbeat = z.object({
+  usedStorageBytes: z.number().int().nonnegative(),
+  status: z.enum(["online", "degraded"])
+});
+
+export const placement = z.object({
+  placementId: opaqueId,
+  nodeId: opaqueId,
+  createdAt: z.number().int()
 });
 
 export const objectRecord = z.object({

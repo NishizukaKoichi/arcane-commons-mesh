@@ -5,15 +5,31 @@ info:
   description: Coordination metadata only. File bodies, plaintext names, paths, and keys are forbidden.
 servers:
   - url: http://127.0.0.1:8787
+security:
+  - bearerSession: []
 paths:
   /v1/auth/challenges:
-    post: { operationId: createAuthChallenge, responses: { "201": { description: Created } } }
+    post:
+      security: []
+      operationId: createAuthChallenge
+      responses: { "201": { description: Created } }
   /v1/auth/sessions:
-    post: { operationId: createAuthSession, responses: { "200": { description: Signed challenge accepted }, "401": { description: Invalid, expired, or replayed } } }
+    post:
+      security: []
+      operationId: createAuthSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AuthSessionRequest" }
+      responses: { "200": { description: Signed challenge accepted }, "401": { description: Invalid, expired, or replayed } }
   /v1/auth/sessions/current:
     delete: { operationId: revokeCurrentSession, responses: { "200": { description: Revoked } } }
   /v1/communities:
-    post: { operationId: createCommunity, responses: { "201": { description: Created } } }
+    post:
+      security: []
+      operationId: createCommunity
+      responses: { "201": { description: Root-signed community created } }
   /v1/communities/{communityId}:
     get: { operationId: getCommunity, parameters: [{$ref: "#/components/parameters/CommunityId"}], responses: { "200": { description: Community } } }
   /v1/communities/{communityId}/invites:
@@ -77,8 +93,34 @@ paths:
   /v1/communities/{communityId}/audit-anchors:
     get: { operationId: listAuditAnchors, parameters: [{$ref: "#/components/parameters/CommunityId"}], responses: { "200": { description: Anchors } } }
   /v1/internal/audit-anchors/run:
-    post: { operationId: runAuditAnchor, responses: { "202": { description: Scheduled }, "404": { description: Hidden unless locally authorized } } }
+    post:
+      security:
+        - internalSecret: []
+      operationId: runAuditAnchor
+      responses: { "202": { description: Scheduled }, "404": { description: Hidden unless locally authorized } }
 components:
+  securitySchemes:
+    bearerSession:
+      type: http
+      scheme: bearer
+      description: Short-lived token issued after an Ed25519-signed one-use challenge.
+    internalSecret:
+      type: apiKey
+      in: header
+      name: x-acm-internal-secret
+      description: Local development or Worker cron maintenance authorization only.
+  schemas:
+    AuthSessionRequest:
+      type: object
+      additionalProperties: false
+      required: [challengeId, challenge, memberId, publicKey, signature, replayNonce]
+      properties:
+        challengeId: { type: string, minLength: 1 }
+        challenge: { type: string, minLength: 43, maxLength: 43 }
+        memberId: { type: string, minLength: 1 }
+        publicKey: { type: string, minLength: 43, maxLength: 43 }
+        signature: { type: string, minLength: 86, maxLength: 86 }
+        replayNonce: { type: string, minLength: 16, maxLength: 128 }
   parameters:
     CommunityId: { name: communityId, in: path, required: true, schema: { type: string } }
     RequestId: { name: requestId, in: path, required: true, schema: { type: string } }

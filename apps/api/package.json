@@ -8,10 +8,12 @@
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:d1": "node test/d1.integration.mjs",
     "build": "wrangler deploy --dry-run --env=\"\" --outdir dist"
   },
   "dependencies": {
     "@hono/zod-validator": "0.9.0",
+    "@noble/hashes": "2.2.0",
     "hono": "4.12.32",
     "zod": "4.4.3"
   },
