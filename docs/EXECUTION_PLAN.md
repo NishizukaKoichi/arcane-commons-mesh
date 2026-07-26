@@ -46,3 +46,7 @@ also require static review, documentation, or local process history.
 - 2026-07-26: separated protocol, storage-node, and testkit crates. The in-memory
   mesh now enforces independent failure domains and tests three replicas, outage
   restore, corrupted-replica rejection, audit health, and encrypted repair.
+- 2026-07-26: added the exchangeable local control-plane model with one-use
+  challenges and replay nonces, membership, node/object/placement records,
+  monotonic catalog pointers, non-transferable credit, one-member-one-vote,
+  append-only vote history, and tamper-evident community snapshot export.

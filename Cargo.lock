@@ -82,6 +82,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "arcane-mesh-control"
+version = "0.1.0"
+dependencies = [
+ "arcane-mesh-core",
+ "blake3",
+ "rand_core",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "arcane-mesh-core"
 version = "0.1.0"
 dependencies = [

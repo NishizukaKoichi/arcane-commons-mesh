@@ -4,6 +4,7 @@ members = [
   "crates/mesh-protocol",
   "crates/mesh-node",
   "crates/mesh-testkit",
+  "crates/mesh-control",
   "crates/mesh-cli"
 ]
 resolver = "2"
