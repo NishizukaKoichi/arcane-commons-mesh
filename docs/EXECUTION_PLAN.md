@@ -36,3 +36,10 @@
 Every acceptance criterion receives an ID in the machine-readable verification
 report. A single `verify:mvp` exit code is not sufficient evidence for claims that
 also require static review, documentation, or local process history.
+
+## Progress
+
+- 2026-07-26: foundation and vertical encryption/recovery/CAS proof committed.
+- 2026-07-26: added constant-memory chunk streaming boundaries, deterministic
+  domain-separated membership signing, audit hash chain/Merkle root, and
+  idempotent integer storage-credit arithmetic. Network/API adapters remain next.
