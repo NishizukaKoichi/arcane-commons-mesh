@@ -218,6 +218,25 @@ export function createApp(options: AppOptions = {}) {
             JSON.stringify({ message, rootSignature: item.rootSignature }),
             item.createdAt,
             item.createdAt + 31_536_000
+          ),
+          context.env.DB.prepare(
+            "INSERT INTO credit_accounts (member_id, created_at) VALUES (?, ?)"
+          ).bind(item.founderMemberId, item.createdAt),
+          context.env.DB.prepare(
+            `INSERT INTO credit_policies
+             (community_id, monthly_base_milli_gib_hour, earned_expiry_days, upload_grace_days)
+             VALUES (?, 10800000, 90, 7)`
+          ).bind(item.communityId),
+          context.env.DB.prepare(
+            `INSERT INTO credit_entries
+             (entry_id, member_id, idempotency_key, milli_gib_hour, reason, occurred_at, expires_at)
+             VALUES (?, ?, ?, 10800000, 'monthly_base_grant', ?, ?)`
+          ).bind(
+            `base:${item.founderMemberId}:${new Date(item.createdAt * 1000).toISOString().slice(0, 7)}`,
+            item.founderMemberId,
+            `base:${item.founderMemberId}:${new Date(item.createdAt * 1000).toISOString().slice(0, 7)}`,
+            item.createdAt,
+            item.createdAt + 31 * 86400
           )
         ]);
         await appendAuditEvent(context.env.DB, {
@@ -403,7 +422,21 @@ export function createApp(options: AppOptions = {}) {
           ),
           context.env.DB.prepare(
             "UPDATE join_requests SET status = 'approved' WHERE request_id = ? AND status = 'pending'"
-          ).bind(requestId)
+          ).bind(requestId),
+          context.env.DB.prepare(
+            "INSERT INTO credit_accounts (member_id, created_at) VALUES (?, ?)"
+          ).bind(item.memberId, now()),
+          context.env.DB.prepare(
+            `INSERT INTO credit_entries
+             (entry_id, member_id, idempotency_key, milli_gib_hour, reason, occurred_at, expires_at)
+             VALUES (?, ?, ?, 10800000, 'monthly_base_grant', ?, ?)`
+          ).bind(
+            `base:${item.memberId}:${new Date(now() * 1000).toISOString().slice(0, 7)}`,
+            item.memberId,
+            `base:${item.memberId}:${new Date(now() * 1000).toISOString().slice(0, 7)}`,
+            now(),
+            now() + 31 * 86400
+          )
         ]);
       } catch {
         return context.json({ error: "membership_conflict" }, 409);
@@ -798,15 +831,79 @@ export function createApp(options: AppOptions = {}) {
       const principal = context.get("principal");
       if (context.env?.DB) {
         const status = action === "accept" ? "accepted" : action === "complete" ? "completed" : "failed";
-        const result = await context.env.DB.prepare(
+        const task = await context.env.DB.prepare(
+          `SELECT t.task_kind, t.status AS task_status, t.object_cid, t.node_id, n.owner_member_id,
+                  o.ciphertext_size, o.community_id
+           FROM node_tasks t
+           JOIN nodes n ON n.node_id = t.node_id
+           LEFT JOIN objects o ON o.object_cid = t.object_cid
+           WHERE t.task_id = ? AND n.owner_member_id = ? AND n.community_id = ?`
+        )
+          .bind(taskId, principal.memberId, principal.communityId)
+          .first<{
+            task_kind: string;
+            task_status: string;
+            object_cid: string | null;
+            node_id: string;
+            owner_member_id: string;
+            ciphertext_size: number | null;
+            community_id: string | null;
+          }>();
+        if (!task) return context.json({ error: "task_not_found_or_not_owned" }, 404);
+        const requiredStatus = action === "accept" ? "pending" : "accepted";
+        if (task.task_status !== requiredStatus) {
+          return context.json({ error: "invalid_task_transition" }, 409);
+        }
+        const transition = await context.env.DB.prepare(
           `UPDATE node_tasks SET status = ?
            WHERE task_id = ? AND node_id IN
-             (SELECT node_id FROM nodes WHERE owner_member_id = ? AND community_id = ?)`
+             (SELECT node_id FROM nodes WHERE owner_member_id = ? AND community_id = ?)
+             AND status = ?`
         )
-          .bind(status, taskId, principal.memberId, principal.communityId)
+          .bind(status, taskId, principal.memberId, principal.communityId, requiredStatus)
           .run();
-        if ((result.meta.changes ?? 0) !== 1) {
-          return context.json({ error: "task_not_found_or_not_owned" }, 404);
+        if ((transition.meta.changes ?? 0) !== 1) {
+          return context.json({ error: "task_transition_conflict" }, 409);
+        }
+        if (
+          action === "complete" &&
+          task.task_kind === "audit_object" &&
+          task.ciphertext_size !== null
+        ) {
+          const earned = Math.max(
+            1,
+            Math.ceil((task.ciphertext_size * 6 * 1000) / 1024 ** 3)
+          );
+          await context.env.DB.prepare(
+              `INSERT OR IGNORE INTO credit_entries
+               (entry_id, member_id, idempotency_key, milli_gib_hour, reason,
+                occurred_at, expires_at)
+               VALUES (?, ?, ?, ?, 'audited_storage_earned', ?, ?)`
+            ).bind(
+              `audit-credit:${taskId}`,
+              task.owner_member_id,
+              `audit-credit:${taskId}`,
+              earned,
+              now(),
+              now() + 90 * 86400
+            )
+            .run();
+        }
+        if (action !== "accept") {
+          await appendAuditEvent(context.env.DB, {
+            communityId: principal.communityId,
+            kind:
+              task.task_kind === "audit_object"
+                ? action === "complete"
+                  ? "audit_succeeded"
+                  : "audit_failed"
+                : action === "complete"
+                  ? "repair_completed"
+                  : "repair_failed",
+            actorId: principal.memberId,
+            subjectId: task.object_cid ?? taskId,
+            occurredAt: now()
+          });
         }
         return context.json({ taskId, status });
       }

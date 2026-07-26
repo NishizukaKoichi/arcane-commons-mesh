@@ -1,6 +1,7 @@
 import { generateKeyPairSync, sign, type KeyObject } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app";
+import { auditMerkleRoot } from "../src/maintenance";
 import {
   fromBase64Url,
   hashOpaque,
@@ -50,6 +51,16 @@ async function login(
 }
 
 describe("control plane API", () => {
+  it("builds deterministic BLAKE3 Merkle roots including the empty day", () => {
+    expect(auditMerkleRoot([])).toHaveLength(64);
+    expect(auditMerkleRoot(["a".repeat(64), "b".repeat(64), "c".repeat(64)])).toBe(
+      auditMerkleRoot(["a".repeat(64), "b".repeat(64), "c".repeat(64)])
+    );
+    expect(auditMerkleRoot(["b".repeat(64), "a".repeat(64)])).not.toBe(
+      auditMerkleRoot(["a".repeat(64), "b".repeat(64)])
+    );
+  });
+
   it("accepts a signed one-use challenge then rejects replay", async () => {
     let now = 100;
     const repository = new MemoryRepository();

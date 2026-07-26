@@ -127,4 +127,61 @@ export async function runMaintenance(db: D1Database, now: number): Promise<void>
       )
       .run();
   }
+  await anchorPreviousUtcDay(db, now);
+}
+
+export function auditMerkleRoot(eventHashes: string[]): string {
+  if (eventHashes.length === 0) {
+    return bytesToHex(blake3(new TextEncoder().encode("acm.audit.empty.v1")));
+  }
+  let level: Uint8Array[] = eventHashes.map((eventHash) =>
+    blake3(new TextEncoder().encode(eventHash))
+  );
+  while (level.length > 1) {
+    if (level.length % 2 === 1) level.push(level[level.length - 1]!.slice());
+    const next: Uint8Array[] = [];
+    for (let index = 0; index < level.length; index += 2) {
+      const pair = new Uint8Array(64);
+      pair.set(level[index]!, 0);
+      pair.set(level[index + 1]!, 32);
+      next.push(blake3(pair));
+    }
+    level = next;
+  }
+  return bytesToHex(level[0]!);
+}
+
+async function anchorPreviousUtcDay(db: D1Database, now: number): Promise<void> {
+  const currentDay = new Date(now * 1000);
+  currentDay.setUTCHours(0, 0, 0, 0);
+  const end = Math.floor(currentDay.getTime() / 1000);
+  const start = end - 86400;
+  const period = new Date(start * 1000).toISOString().slice(0, 10);
+  const communities = await db
+    .prepare("SELECT community_id FROM communities WHERE status = 'active' ORDER BY community_id")
+    .all<{ community_id: string }>();
+  for (const community of communities.results) {
+    const events = await db
+      .prepare(
+        `SELECT event_hash FROM audit_events
+         WHERE community_id = ? AND occurred_at >= ? AND occurred_at < ?
+         ORDER BY sequence`
+      )
+      .bind(community.community_id, start, end)
+      .all<{ event_hash: string }>();
+    await db
+      .prepare(
+        `INSERT OR IGNORE INTO audit_anchors
+         (anchor_id, community_id, period, merkle_root, adapter_kind, anchored_at)
+         VALUES (?, ?, ?, ?, 'd1', ?)`
+      )
+      .bind(
+        `d1:${community.community_id}:${period}`,
+        community.community_id,
+        period,
+        auditMerkleRoot(events.results.map((event) => event.event_hash)),
+        now
+      )
+      .run();
+  }
 }

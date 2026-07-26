@@ -279,6 +279,32 @@ try {
   ) {
     throw new Error(`audit task was not scheduled: ${JSON.stringify(tasks.body)}`);
   }
+  const auditTask = tasks.body.tasks.find((task) => task.taskKind === "audit_object");
+  for (const action of ["accept", "complete"]) {
+    const transition = await request(`/v1/tasks/${auditTask.taskId}/${action}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` }
+    });
+    if (transition.response.status !== 200) {
+      throw new Error(`audit task ${action} failed: ${JSON.stringify(transition.body)}`);
+    }
+  }
+  const credits = await request("/v1/credits/me", {
+    headers: { authorization: `Bearer ${token}` }
+  });
+  if (
+    credits.response.status !== 200 ||
+    credits.body.balanceMilliGibHour <= 10_800_000 ||
+    credits.body.transferable !== false
+  ) {
+    throw new Error(`audited storage credit was not earned: ${JSON.stringify(credits.body)}`);
+  }
+  const anchors = await request(`/v1/communities/${communityId}/audit-anchors`, {
+    headers: { authorization: `Bearer ${token}` }
+  });
+  if (anchors.response.status !== 200 || anchors.body.anchors.length < 1) {
+    throw new Error(`daily D1 anchor was not created: ${JSON.stringify(anchors.body)}`);
+  }
 
   const proposal = await request(`/v1/communities/${communityId}/proposals`, {
     method: "POST",
