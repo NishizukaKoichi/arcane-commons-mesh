@@ -14,7 +14,10 @@ use serde::Serialize;
 use std::{
     fs,
     path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
     sync::Arc,
+    thread,
+    time::Duration,
 };
 
 const CONTENT_SENTINEL: &[u8] = b"ACM_CONTENT_SENTINEL_2026_07_26_7f98a21d";
@@ -48,6 +51,8 @@ pub fn verify_mvp() -> Result<()> {
     fs::create_dir_all(&owner_root)?;
     fs::create_dir_all(&node_root)?;
     fs::create_dir_all(&recovery_root)?;
+    let mut process_nodes = ProcessNodes::start(isolated.path().join("process-nodes"))?;
+    process_nodes.assert_running()?;
 
     let fixture_path = owner_root.join(FILE_NAME_SENTINEL);
     fs::write(&fixture_path, CONTENT_SENTINEL)?;
@@ -80,7 +85,11 @@ pub fn verify_mvp() -> Result<()> {
     if replicated_cid != object_cid || mesh.audit_all(&object_cid) != 3 {
         bail!("step 3: three-replica assertion failed");
     }
-    pass(3, "ciphertext replicated to three failure domains");
+    process_nodes.assert_running()?;
+    pass(
+        3,
+        "ciphertext replicated to three failure domains; four node processes are live",
+    );
 
     fs::remove_file(&fixture_path)?;
     if fixture_path.exists() {
@@ -392,4 +401,64 @@ fn write_report(report: &VerificationReport) -> Result<()> {
         serde_json::to_vec_pretty(report)?,
     )?;
     Ok(())
+}
+
+struct ProcessNodes {
+    children: Vec<Child>,
+}
+
+impl ProcessNodes {
+    fn start(root: PathBuf) -> Result<Self> {
+        fs::create_dir_all(&root)?;
+        let executable = std::env::current_exe()?;
+        let mut children = Vec::new();
+        for name in ["storage-a", "storage-b", "storage-c", "auditor"] {
+            let node_root = root.join(name);
+            fs::create_dir_all(&node_root)?;
+            children.push(
+                Command::new(&executable)
+                    .args(["node", "run"])
+                    .arg(&node_root)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .with_context(|| format!("could not start process node {name}"))?,
+            );
+        }
+        for _ in 0..50 {
+            if ["storage-a", "storage-b", "storage-c", "auditor"]
+                .iter()
+                .all(|name| root.join(name).join("ready").exists())
+            {
+                return Ok(Self { children });
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        for child in &mut children {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        bail!("process nodes did not become ready")
+    }
+
+    fn assert_running(&mut self) -> Result<()> {
+        if self
+            .children
+            .iter_mut()
+            .any(|child| child.try_wait().ok().flatten().is_some())
+        {
+            bail!("a local node process exited before verification completed");
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ProcessNodes {
+    fn drop(&mut self) {
+        for child in &mut self.children {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
 }
