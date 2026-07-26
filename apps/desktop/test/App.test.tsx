@@ -27,8 +27,8 @@ describe("desktop safety flows", () => {
 
   it("shows overview after recovery export", async () => {
     await finishOnboarding();
-    expect(screen.getByText("保管庫は安全です")).toBeInTheDocument();
-    expect(screen.getByText("3 / 3")).toBeInTheDocument();
+    expect(screen.getByText("保管庫は空です")).toBeInTheDocument();
+    expect(screen.getByText("バックアップなし")).toBeInTheDocument();
   });
 
   it("requires a provider path before enabling storage", async () => {
@@ -45,7 +45,9 @@ describe("desktop safety flows", () => {
   it("requires confirmation for delete and explains retention", async () => {
     const user = await finishOnboarding();
     await user.click(screen.getByRole("button", { name: "保管庫" }));
-    await user.click(screen.getByRole("button", { name: "家族写真 2026を削除" }));
+    await user.type(screen.getByLabelText("追加するファイルの場所"), "/private/家族写真.jpg");
+    await user.click(screen.getByRole("button", { name: "ファイルを追加" }));
+    await user.click(screen.getByRole("button", { name: "家族写真.jpgを削除" }));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(screen.getByText(/30日間は過去の版から復元/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "キャンセル" }));

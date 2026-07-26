@@ -203,7 +203,9 @@ dependencies = [
 name = "arcane-mesh-desktop"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "arcane-mesh-core",
+ "blake3",
  "rand_core 0.6.4",
  "serde",
  "serde_json",
@@ -211,6 +213,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-stronghold",
  "tempfile",
+ "zeroize",
 ]
 
 [[package]]

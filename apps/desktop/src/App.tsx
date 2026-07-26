@@ -44,17 +44,21 @@ const labels = {
   }
 } satisfies Record<Language, Record<Page, string>>;
 
-const sampleFiles = [
-  { name: "家族写真 2026", size: "1.8 GB", copies: "3/3", modified: "8分前" },
-  { name: "研究ノート", size: "284 MB", copies: "3/3", modified: "昨日" },
-  { name: "AIの記憶", size: "96 MB", copies: "2/3", modified: "2日前" }
-];
+type StoredFile = {
+  fileId: string;
+  name: string;
+  size: string;
+  copies: string;
+  modified: string;
+};
 
 export function App() {
   const [page, setPage] = useState<Page>("dashboard");
   const [language, setLanguage] = useState<Language>("ja");
   const [onboarded, setOnboarded] = useState(false);
   const [recoverySaved, setRecoverySaved] = useState(false);
+  const [sessionPassphrase, setSessionPassphrase] = useState("");
+  const [files, setFiles] = useState<StoredFile[]>([]);
   const [providerPath, setProviderPath] = useState("");
   const [providerEnabled, setProviderEnabled] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
@@ -64,7 +68,10 @@ export function App() {
     return (
       <Onboarding
         recoverySaved={recoverySaved}
-        onRecoverySaved={() => setRecoverySaved(true)}
+        onRecoverySaved={(passphrase) => {
+          setRecoverySaved(true);
+          setSessionPassphrase(passphrase);
+        }}
         onComplete={() => setOnboarded(true)}
       />
     );
@@ -128,8 +135,15 @@ export function App() {
           </button>
         </header>
         <div className="page-enter" key={page}>
-          {page === "dashboard" && <Dashboard onNavigate={setPage} />}
-          {page === "vault" && <Vault onDelete={setDeleteTarget} />}
+          {page === "dashboard" && <Dashboard files={files} onNavigate={setPage} />}
+          {page === "vault" && (
+            <Vault
+              files={files}
+              passphrase={sessionPassphrase}
+              onAdded={(file) => setFiles((current) => [file, ...current])}
+              onDelete={setDeleteTarget}
+            />
+          )}
           {page === "storage" && (
             <ProvideStorage
               path={providerPath}
@@ -159,7 +173,7 @@ function Onboarding({
   onComplete
 }: {
   recoverySaved: boolean;
-  onRecoverySaved: () => void;
+  onRecoverySaved: (passphrase: string) => void;
   onComplete: () => void;
 }) {
   const [passphrase, setPassphrase] = useState("");
@@ -174,8 +188,8 @@ function Onboarding({
       } else {
         setExportPath("ブラウザ表示では書き出しを行いません");
       }
+      onRecoverySaved(passphrase);
       setPassphrase("");
-      onRecoverySaved();
     } catch (reason) {
       setError(String(reason));
     }
@@ -221,25 +235,31 @@ function Onboarding({
   );
 }
 
-function Dashboard({ onNavigate }: { onNavigate: (page: Page) => void }) {
+function Dashboard({
+  files,
+  onNavigate
+}: {
+  files: StoredFile[];
+  onNavigate: (page: Page) => void;
+}) {
   return (
     <section className="content">
       <PageTitle eyebrow="今日の状態" title="概要" action={<button className="primary-action compact" onClick={() => onNavigate("vault")}><Plus size={17} /> ファイルを追加</button>} />
       <div className="safety-line">
         <div className="safety-orb"><ShieldCheck size={30} /></div>
-        <div><p>保管庫は安全です</p><strong>すべてのファイルに必要な複製があります</strong></div>
-        <span className="last-backup">最終バックアップ 8分前</span>
+        <div><p>{files.length ? "保管庫は安全です" : "保管庫は空です"}</p><strong>{files.length ? "すべてのファイルに必要な複製があります" : "ファイルを追加すると暗号化して3拠点へ保存します"}</strong></div>
+        <span className="last-backup">{files.length ? "最終バックアップ たった今" : "バックアップなし"}</span>
       </div>
       <div className="metric-row">
-        <Metric label="使用中" value="2.18 GB" detail="論理容量" />
-        <Metric label="安全な複製" value="3 / 3" detail="6.54 GBを分散保管" />
+        <Metric label="ファイル" value={String(files.length)} detail="暗号化済み" />
+        <Metric label="安全な複製" value={files.length ? "3 / 3" : "—"} detail="3拠点へ分散保管" />
         <Metric label="今月の共有容量" value="68%" detail="残り 3.4 GiB相当" />
       </div>
       <div className="split-section">
         <section>
           <SectionHeading title="最近の保管" link="保管庫を開く" onClick={() => onNavigate("vault")} />
           <div className="file-list">
-            {sampleFiles.slice(0, 2).map((file) => <FileRow file={file} key={file.name} />)}
+            {files.length ? files.slice(0, 2).map((file) => <FileRow file={file} key={file.fileId} />) : <p className="form-note">まだファイルはありません。</p>}
           </div>
         </section>
         <section>
@@ -255,15 +275,54 @@ function Dashboard({ onNavigate }: { onNavigate: (page: Page) => void }) {
   );
 }
 
-function Vault({ onDelete }: { onDelete: (file: string) => void }) {
+function Vault({
+  files,
+  passphrase,
+  onAdded,
+  onDelete
+}: {
+  files: StoredFile[];
+  passphrase: string;
+  onAdded: (file: StoredFile) => void;
+  onDelete: (file: string) => void;
+}) {
+  const [sourcePath, setSourcePath] = useState("");
+  const [error, setError] = useState("");
+  const addFile = async () => {
+    setError("");
+    try {
+      const result = isTauri()
+        ? await invoke<{ fileId: string; name: string; sizeBytes: number; safeReplicas: string }>(
+            "add_vault_file",
+            { sourcePath, passphrase }
+          )
+        : {
+            fileId: `browser-${Date.now()}`,
+            name: sourcePath.split("/").pop() || "選択したファイル",
+            sizeBytes: 0,
+            safeReplicas: "3/3"
+          };
+      onAdded({
+        fileId: result.fileId,
+        name: result.name,
+        size: formatBytes(result.sizeBytes),
+        copies: result.safeReplicas,
+        modified: "たった今"
+      });
+      setSourcePath("");
+    } catch (reason) {
+      setError(String(reason));
+    }
+  };
   return (
     <section className="content">
-      <PageTitle eyebrow="暗号化して分散保管" title="保管庫" action={<button className="primary-action compact"><FolderPlus size={17} /> ファイルを追加</button>} />
-      <div className="drop-zone" tabIndex={0}><CloudCog size={28} /><div><strong>ここへファイルやフォルダを追加</strong><span>元のファイル名と中身は端末の外へ出ません</span></div></div>
+      <PageTitle eyebrow="暗号化して分散保管" title="保管庫" action={<button className="primary-action compact" disabled={!sourcePath} onClick={() => void addFile()}><FolderPlus size={17} /> ファイルを追加</button>} />
+      <label className="drop-zone"><CloudCog size={28} /><div><strong>追加するファイルの場所</strong><span>元のファイル名と中身は端末の外へ出ません</span></div><input aria-label="追加するファイルの場所" value={sourcePath} onChange={(event) => setSourcePath(event.target.value)} placeholder="/Users/.../写真.jpg" /></label>
+      {error && <div className="inline-warning" role="alert">{error}</div>}
       <div className="table-heading"><span>名前</span><span>容量</span><span>安全な複製</span><span>更新</span><span /></div>
       <div className="file-table">
-        {sampleFiles.map((file) => (
-          <div className="file-table-row" key={file.name}>
+        {files.map((file) => (
+          <div className="file-table-row" key={file.fileId}>
             <span className="file-name"><FileLock2 size={18} />{file.name}</span>
             <span>{file.size}</span>
             <span className={file.copies === "3/3" ? "copy-safe" : "copy-warning"}>{file.copies}</span>
@@ -385,7 +444,7 @@ function Metric({ label, value, detail }: { label: string; value: string; detail
 function SectionHeading({ title, link, onClick }: { title: string; link: string; onClick?: () => void }) {
   return <div className="section-heading"><h2>{title}</h2><button onClick={onClick}>{link}<ChevronRight size={15} /></button></div>;
 }
-function FileRow({ file }: { file: (typeof sampleFiles)[number] }) {
+function FileRow({ file }: { file: StoredFile }) {
   return <div className="file-row"><span className="file-icon"><FileLock2 size={18} /></span><div><strong>{file.name}</strong><span>{file.size} · {file.modified}</span></div><span className={file.copies === "3/3" ? "copy-safe" : "copy-warning"}>{file.copies}</span></div>;
 }
 function NodeRow({ name, state, usage, warning = false }: { name: string; state: string; usage: string; warning?: boolean }) {
@@ -397,4 +456,11 @@ function ConfirmDialog({ fileName, onCancel, onConfirm }: { fileName: string; on
 
 function isTauri() {
   return "__TAURI_INTERNALS__" in window;
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KiB`;
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MiB`;
+  return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
 }
