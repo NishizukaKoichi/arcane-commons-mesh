@@ -1,0 +1,78 @@
+---
+import Base from "../layouts/Base.astro";
+---
+<Base
+  title="魔法網 — 自分の鍵で守る共同ストレージ"
+  description="端末内で暗号化し、共同体の複数の保存拠点へ保管する、会員制の共同ストレージMVP。"
+>
+  <section class="hero">
+    <div class="hero-copy">
+      <p class="eyebrow">Arcane Commons Mesh / v0.1</p>
+      <h1>大切なものを、<br />自分の鍵で守る。</h1>
+      <p class="lead">端末で暗号化してから、共同体の三つの保存拠点へ。ひとつが止まっても、別の場所から取り戻せます。</p>
+      <div class="hero-actions">
+        <a class="primary-link" href="/download/">ローカル版を試す <span>→</span></a>
+        <a class="quiet-link" href="/specification/">公開仕様を読む</a>
+      </div>
+    </div>
+    <div class="mesh-visual" aria-label="所有者と三つの保存拠点の概念図">
+      <span class="mesh-ring ring-one"></span>
+      <span class="mesh-ring ring-two"></span>
+      <span class="mesh-line line-one"></span>
+      <span class="mesh-line line-two"></span>
+      <span class="mesh-line line-three"></span>
+      <span class="mesh-node owner"><b>鍵</b><small>あなた</small></span>
+      <span class="mesh-node node-a"><b>A</b><small>保存拠点</small></span>
+      <span class="mesh-node node-b"><b>B</b><small>保存拠点</small></span>
+      <span class="mesh-node node-c"><b>C</b><small>保存拠点</small></span>
+    </div>
+    <div class="hero-trust">
+      <span><b>3 / 3</b> 安全な複製</span>
+      <span><b>端末内</b> 暗号化と復号</span>
+      <span><b>非譲渡</b> 共有容量</span>
+    </div>
+  </section>
+
+  <section class="principle">
+    <p class="eyebrow">所有を分ける</p>
+    <h2>預けるのは、読めない断片だけ。</h2>
+    <p>ファイル名、中身、復号鍵は保存拠点へ渡りません。Cloudflareは会員名簿と配置の調整役であり、ファイルの保管会社ではありません。</p>
+  </section>
+
+  <section class="three-points">
+    <article>
+      <span>01</span>
+      <h3>消えにくい</h3>
+      <p>暗号化されたデータを三つの障害領域へ。一拠点の停止と改ざんを検出し、健全な複製へ切り替えます。</p>
+    </article>
+    <article>
+      <span>02</span>
+      <h3>移せる</h3>
+      <p>公開された形式と暗号化復旧ファイルを使い、新しい端末や別の調整基盤へ持ち出せる境界を保ちます。</p>
+    </article>
+    <article>
+      <span>03</span>
+      <h3>読まれにくい</h3>
+      <p>4 MiB単位で端末内暗号化。保存する側に見えるのは、内容を復号できないCID付きblobだけです。</p>
+    </article>
+  </section>
+
+  <section class="flow">
+    <div>
+      <p class="eyebrow">通常の使い方</p>
+      <h2>ファイルを入れる。<br />あとは状態を見る。</h2>
+    </div>
+    <ol>
+      <li><b>1</b><span><strong>端末で暗号化</strong>ファイル鍵は版ごとに作られ、外へ送られません。</span></li>
+      <li><b>2</b><span><strong>三つへ複製</strong>異なる所有者・地域・障害領域を優先します。</span></li>
+      <li><b>3</b><span><strong>継続して確認</strong>CID監査と修復で、保存状態を追跡します。</span></li>
+    </ol>
+  </section>
+
+  <section class="honesty">
+    <p class="eyebrow">v0.1の現在地</p>
+    <h2>完全分散ではありません。</h2>
+    <p>初版は会員制で、調整APIを使うローカル検証可能なMVPです。匿名網でも、独立監査済みの本番サービスでもありません。暗号資産、売買可能なトークン、wallet、実ブロックチェーン接続はありません。</p>
+    <a class="quiet-link" href="/status/">実装状態と制約を見る →</a>
+  </section>
+</Base>

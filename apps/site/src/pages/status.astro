@@ -1,0 +1,36 @@
+---
+import Base from "../layouts/Base.astro";
+
+const implemented = [
+  "端末内暗号化と4 MiBストリーミング",
+  "暗号化復旧ファイルと隔離環境復旧",
+  "三拠点複製・一拠点停止復元",
+  "改ざん拒否・健全複製への切替・修復",
+  "会員、配置、共有容量、一人一票、監査chain",
+  "TauriデスクトップとStronghold",
+  "Worker/D1 schema、OpenAPI、15段階ローカル検証"
+];
+const pending = [
+  "独立した複数端末・複数地域での長期運用",
+  "第三者による暗号・実装セキュリティ監査",
+  "本番Cloudflare環境と自己ホストrelay",
+  "署名・配布・自動更新を備えた公開リリース"
+];
+---
+<Base title="実装状態 — 魔法網" description="Arcane Commons Mesh v0.1の実装済み機能、未完了項目、既知制約。">
+  <section class="document-hero status-hero">
+    <p class="eyebrow">System status / local MVP</p>
+    <h1>ローカル検証は成功。<br />本番運用はまだ。</h1>
+    <p>現在の状態を誇張せず公開します。三つの保存プロセスは一台の中で検証しており、地理的な障害独立性を証明するものではありません。</p>
+    <span class="status-label"><i></i> 15 / 15 ローカル検証成功</span>
+  </section>
+  <section class="status-columns">
+    <div><p class="eyebrow">実装済み</p><ul>{implemented.map((item) => <li><i>✓</i>{item}</li>)}</ul></div>
+    <div><p class="eyebrow">本番前に必要</p><ul>{pending.map((item) => <li><i>—</i>{item}</li>)}</ul></div>
+  </section>
+  <section class="honesty compact-section">
+    <p class="eyebrow">既知の限界</p>
+    <h2>匿名でも、不滅でもありません。</h2>
+    <p>保存拠点は暗号文の容量、通信時刻、接続相手を観測できます。初回のclean recoveryでは、調整基盤が新しい履歴をすべて隠した場合のrollbackを単独検知できません。監査は厳密なproof-of-retrievabilityではありません。</p>
+  </section>
+</Base>

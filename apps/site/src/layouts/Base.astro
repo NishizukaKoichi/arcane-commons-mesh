@@ -1,0 +1,57 @@
+---
+import "../styles/global.css";
+
+interface Props {
+  title: string;
+  description: string;
+}
+
+const { title, description } = Astro.props;
+const pathname = Astro.url.pathname;
+const links = [
+  { href: "/", label: "ホーム" },
+  { href: "/specification/", label: "公開仕様" },
+  { href: "/status/", label: "状態" },
+  { href: "/download/", label: "入手方法" }
+];
+---
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="description" content={description} />
+    <meta name="theme-color" content="#101713" />
+    <title>{title}</title>
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="wordmark" href="/" aria-label="魔法網 ホーム">
+        <span class="mark" aria-hidden="true"><i></i><i></i><i></i><b></b></span>
+        <span><strong>魔法網</strong><small>Arcane Commons Mesh</small></span>
+      </a>
+      <nav aria-label="公開サイト">
+        {links.map((link) => (
+          <a href={link.href} aria-current={pathname === link.href ? "page" : undefined}>
+            {link.label}
+          </a>
+        ))}
+      </nav>
+    </header>
+    <main>
+      <slot />
+    </main>
+    <footer>
+      <a class="wordmark footer-mark" href="/">
+        <span class="mark" aria-hidden="true"><i></i><i></i><i></i><b></b></span>
+        <span><strong>魔法網</strong><small>会員制・暗号化・共同保存のローカルMVP</small></span>
+      </a>
+      <p>ファイル本体と復号鍵を、運営会社へ預けないための公開実装。</p>
+      <nav aria-label="補助リンク">
+        <a href="/specification/">仕様</a>
+        <a href="/status/">状態</a>
+        <a href="/download/">入手方法</a>
+      </nav>
+    </footer>
+  </body>
+</html>

@@ -1,0 +1,30 @@
+---
+import Base from "../layouts/Base.astro";
+
+const facts = [
+  ["暗号", "XChaCha20-Poly1305 / Argon2id / Ed25519 / BLAKE3"],
+  ["分割", "既定4 MiBのストリーミングチャンク"],
+  ["複製", "data chunk 3、manifest/catalogは本番目標5"],
+  ["通信", "arcane-commons-mesh/1、直接接続優先・relay交換可能"],
+  ["調整", "Worker + D1。ファイル本体・平文名・復号鍵は禁止"],
+  ["共有容量", "整数milli_gib_hour、非譲渡、非金融"],
+  ["統治", "active membership一件につき一票"],
+  ["復旧", "Argon2idで暗号化された.acm-recovery"]
+];
+---
+<Base title="公開仕様 — 魔法網" description="Arcane Commons Mesh v0.1の暗号、保存、調整、復旧、共有容量の公開仕様。">
+  <section class="document-hero">
+    <p class="eyebrow">Public specification / v0.1</p>
+    <h1>交換できる境界を、<br />先に公開する。</h1>
+    <p>保存形式、復旧形式、調整API、通信操作を公開し、ひとつの運営者や事業者だけが読める仕組みにしません。</p>
+  </section>
+  <section class="spec-list">
+    {facts.map(([label, value]) => <div><span>{label}</span><strong>{value}</strong></div>)}
+  </section>
+  <section class="document-grid">
+    <article><p class="eyebrow">所有</p><h2>鍵は本人の端末に</h2><p>identity key、vault master key、file key、community authority keyは調整APIへ置きません。デスクトップではStrongholdを使用します。</p></article>
+    <article><p class="eyebrow">保存</p><h2>暗号化blobだけ</h2><p>保存拠点は専用root以外へ触れず、path traversalとsymlinkを拒否し、CID検証後にatomic renameします。</p></article>
+    <article><p class="eyebrow">調整</p><h2>名簿と交通整理</h2><p>D1は会員、ノード、CID、配置、task、整数credit、投票、監査hashだけを保持します。R2は必須ではありません。</p></article>
+    <article><p class="eyebrow">移行</p><h2>versioned snapshot</h2><p>公開鍵、資格情報、証明書、catalog pointer、監査chain、方針、投票を持ち出せます。ファイル本体と秘密鍵は含めません。</p></article>
+  </section>
+</Base>

@@ -64,3 +64,7 @@ also require static review, documentation, or local process history.
   verifier now emits machine-readable evidence for replication, outage,
   corruption, repair, credit, forbidden routes, voting, clean recovery,
   plaintext absence, and audit integrity.
+- 2026-07-26: added a four-page static public-information site with an explicit
+  limitations/status page, public boundary summary, and local-build download
+  guidance. It has no authentication, secrets, analytics, or remote runtime and
+  was not deployed.

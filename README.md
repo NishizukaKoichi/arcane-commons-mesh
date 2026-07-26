@@ -45,3 +45,13 @@ pnpm --filter @arcane-commons/desktop tauri build --no-bundle
 
 The current release binary is placed under `target/release/`. It is an unaudited
 development artifact and must not be treated as the only copy of valuable data.
+
+The local public-information site is built as static files with:
+
+```sh
+pnpm --filter @arcane-commons/site build
+```
+
+Its output is placed under `apps/site/dist/`. The site makes no network calls and
+does not imply that a signed public release or geographically independent mesh
+already exists.

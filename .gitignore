@@ -4,6 +4,7 @@ dist/
 .demo/
 .verify/
 .wrangler/
+.astro/
 .env
 *.acm-recovery
 *.sqlite
