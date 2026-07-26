@@ -18,7 +18,12 @@ Operations are `HELLO`, `HAS_OBJECT`, `PUT_OBJECT`, `GET_OBJECT`,
   requires the owner tombstone, retention expiry, and reference check specified in
   ADR 0003.
 
-The current acceptance transport is isolated and in-memory. It exercises the same
-node and protocol boundaries without relay or Internet access. The iroh QUIC
-adapter remains pending; it must bind the transport endpoint key to the signed node
-certificate and add per-connection challenge signatures before it is accepted.
+The native transport is iroh QUIC using the same protocol identifier as ALPN.
+Network endpoints prefer direct paths and retain encrypted relay fallback.
+Deterministic tests bind only `127.0.0.1`, disable relay and discovery, and pass a
+complete endpoint address explicitly, so CI requires no external network.
+
+Every wire frame includes the signed membership credential and a member-signed
+node certificate. The receiver binds that certificate's separate endpoint public
+key to the authenticated iroh connection before accepting the frame. Frame size,
+credential scope, lifetime, role, and object CID are then validated fail-closed.

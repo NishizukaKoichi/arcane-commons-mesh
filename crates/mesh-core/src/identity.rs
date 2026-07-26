@@ -68,6 +68,25 @@ pub struct MembershipCredential {
     pub signature: Vec<u8>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeCertificateClaims {
+    pub certificate_version: u16,
+    pub node_id: String,
+    pub community_id: String,
+    pub owner_member_id: String,
+    pub endpoint_public_key: String,
+    pub allowed_roles: Vec<String>,
+    pub max_storage_bytes: u64,
+    pub issued_at: i64,
+    pub expires_at: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeCertificate {
+    pub claims: NodeCertificateClaims,
+    pub signature: Vec<u8>,
+}
+
 impl MembershipClaims {
     fn canonical_bytes(&self) -> Vec<u8> {
         let mut roles = self.roles.clone();
@@ -118,6 +137,73 @@ impl MembershipCredential {
         }
         let key = VerifyingKey::from_bytes(&self.claims.issuer_public_key)
             .map_err(|_| IdentityError::PublicKey)?;
+        let signature =
+            Signature::from_slice(&self.signature).map_err(|_| IdentityError::Signature)?;
+        key.verify(&self.claims.canonical_bytes(), &signature)
+            .map_err(|_| IdentityError::Signature)
+    }
+}
+
+impl NodeCertificateClaims {
+    fn canonical_bytes(&self) -> Vec<u8> {
+        let mut roles = self.allowed_roles.clone();
+        roles.sort();
+        let mut out = Vec::new();
+        field(&mut out, b"acm.node-certificate.v1");
+        out.extend_from_slice(&self.certificate_version.to_be_bytes());
+        field(&mut out, self.node_id.as_bytes());
+        field(&mut out, self.community_id.as_bytes());
+        field(&mut out, self.owner_member_id.as_bytes());
+        field(&mut out, self.endpoint_public_key.as_bytes());
+        out.extend_from_slice(&(roles.len() as u32).to_be_bytes());
+        for role in roles {
+            field(&mut out, role.as_bytes());
+        }
+        out.extend_from_slice(&self.max_storage_bytes.to_be_bytes());
+        out.extend_from_slice(&self.issued_at.to_be_bytes());
+        out.extend_from_slice(&self.expires_at.to_be_bytes());
+        out
+    }
+
+    pub fn issue(self, owner: &Identity) -> NodeCertificate {
+        let signature = owner.sign(&self.canonical_bytes()).to_vec();
+        NodeCertificate {
+            claims: self,
+            signature,
+        }
+    }
+}
+
+impl NodeCertificate {
+    pub fn verify(
+        &self,
+        owner_public_key: &[u8; 32],
+        expected_community_id: &str,
+        expected_endpoint_public_key: &str,
+        now: i64,
+        clock_skew_seconds: i64,
+    ) -> Result<(), IdentityError> {
+        if self.claims.certificate_version != 1
+            || self.claims.endpoint_public_key != expected_endpoint_public_key
+            || !self.claims.allowed_roles.iter().any(|role| role == "node")
+            || self.claims.max_storage_bytes == 0
+        {
+            return Err(IdentityError::Domain);
+        }
+        if self.claims.community_id != expected_community_id {
+            return Err(IdentityError::Community);
+        }
+        let expected_owner_id = format!("mem_{}", blake3::hash(owner_public_key).to_hex());
+        if self.claims.owner_member_id != expected_owner_id {
+            return Err(IdentityError::Domain);
+        }
+        if now + clock_skew_seconds < self.claims.issued_at
+            || now - clock_skew_seconds > self.claims.expires_at
+        {
+            return Err(IdentityError::Time);
+        }
+        let key =
+            VerifyingKey::from_bytes(owner_public_key).map_err(|_| IdentityError::PublicKey)?;
         let signature =
             Signature::from_slice(&self.signature).map_err(|_| IdentityError::Signature)?;
         key.verify(&self.claims.canonical_bytes(), &signature)
@@ -189,5 +275,35 @@ mod tests {
         let mut reversed = base.clone();
         reversed.roles.reverse();
         assert_eq!(base.canonical_bytes(), reversed.canonical_bytes());
+    }
+
+    #[test]
+    fn node_certificate_binds_a_separate_endpoint_key_to_its_owner() {
+        let owner = Identity::from_seed([9; 32]);
+        let certificate = NodeCertificateClaims {
+            certificate_version: 1,
+            node_id: "node-a".into(),
+            community_id: "community-a".into(),
+            owner_member_id: owner.member_id(),
+            endpoint_public_key: "endpoint-public-key".into(),
+            allowed_roles: vec!["node".into()],
+            max_storage_bytes: 1024,
+            issued_at: 100,
+            expires_at: 200,
+        }
+        .issue(&owner);
+        assert!(certificate
+            .verify(
+                &owner.public_key(),
+                "community-a",
+                "endpoint-public-key",
+                150,
+                5
+            )
+            .is_ok());
+        assert!(matches!(
+            certificate.verify(&owner.public_key(), "community-a", "other-endpoint", 150, 5),
+            Err(IdentityError::Domain)
+        ));
     }
 }

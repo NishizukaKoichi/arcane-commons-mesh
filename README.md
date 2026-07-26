@@ -13,7 +13,7 @@ blockchain connection.
 
 - macOS or Linux
 - Node 22.13 and pnpm 10.13
-- Rust 1.88
+- Rust 1.91
 
 ## Verify locally
 

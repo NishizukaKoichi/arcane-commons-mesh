@@ -4,6 +4,8 @@ use arcane_mesh_core::identity::MembershipCredential;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub mod transport;
+
 pub const PROTOCOL_ID: &str = "arcane-commons-mesh/1";
 pub const MAX_OBJECT_BYTES: usize = 4 * 1024 * 1024 + 128 * 1024;
 pub const MAX_FRAME_BYTES: usize = MAX_OBJECT_BYTES + 16 * 1024;

@@ -7,5 +7,8 @@ rust-version.workspace = true
 
 [dependencies]
 arcane-mesh-core = { path = "../mesh-core" }
+iroh.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
+tokio.workspace = true

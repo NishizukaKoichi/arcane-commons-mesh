@@ -7,7 +7,7 @@
 - Goal: a local, reproducible three-node encrypted cooperative-backup MVP.
 - Out of scope: external deployment/push, paid services, real blockchain,
   production-security claims, and globally independent failure domains.
-- Toolchain: Node 22.13, pnpm 10.13.1, Rust 1.88.
+- Toolchain: Node 22.13, pnpm 10.13.1, Rust 1.91.
 - Initial state: new repository; no inherited code or dirty changes.
 
 ## Decisions
@@ -75,3 +75,7 @@ also require static review, documentation, or local process history.
 - 2026-07-26: implemented the validated `AuditAnchorAdapter` boundary with an
   append-only local JSONL file, a D1 writer adapter, deterministic mock, and an
   interface-only future EVM encoder. No RPC, wallet, key, or contract exists.
+- 2026-07-26: added the native iroh 1.0.3 QUIC transport with authenticated
+  endpoint identities, the `arcane-commons-mesh/1` ALPN, bounded frames,
+  direct-first/network relay configuration, and a relay/discovery-free loopback
+  integration test. Rust moved to 1.91, iroh's supported minimum.
