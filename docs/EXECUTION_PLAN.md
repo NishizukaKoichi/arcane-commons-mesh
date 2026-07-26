@@ -50,3 +50,7 @@ also require static review, documentation, or local process history.
   challenges and replay nonces, membership, node/object/placement records,
   monotonic catalog pointers, non-transferable credit, one-member-one-vote,
   append-only vote history, and tamper-evident community snapshot export.
+- 2026-07-26: added a pinned Hono/Worker adapter, complete initial D1 schema,
+  OpenAPI surface, Ed25519 challenge verification, replay/expiry tests,
+  one-member-one-vote API tests, forbidden financial-route tests, and Wrangler
+  dry-run build. No external deployment was performed.

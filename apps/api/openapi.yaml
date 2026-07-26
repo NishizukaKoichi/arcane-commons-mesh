@@ -1,0 +1,91 @@
+openapi: 3.1.0
+info:
+  title: Arcane Commons Mesh Control Plane
+  version: 0.1.0
+  description: Coordination metadata only. File bodies, plaintext names, paths, and keys are forbidden.
+servers:
+  - url: http://127.0.0.1:8787
+paths:
+  /v1/auth/challenges:
+    post: { operationId: createAuthChallenge, responses: { "201": { description: Created } } }
+  /v1/auth/sessions:
+    post: { operationId: createAuthSession, responses: { "200": { description: Signed challenge accepted }, "401": { description: Invalid, expired, or replayed } } }
+  /v1/auth/sessions/current:
+    delete: { operationId: revokeCurrentSession, responses: { "200": { description: Revoked } } }
+  /v1/communities:
+    post: { operationId: createCommunity, responses: { "201": { description: Created } } }
+  /v1/communities/{communityId}:
+    get: { operationId: getCommunity, parameters: [{$ref: "#/components/parameters/CommunityId"}], responses: { "200": { description: Community } } }
+  /v1/communities/{communityId}/invites:
+    post: { operationId: createInvite, parameters: [{$ref: "#/components/parameters/CommunityId"}], responses: { "201": { description: Created } } }
+  /v1/communities/{communityId}/join-requests:
+    post: { operationId: createJoinRequest, parameters: [{$ref: "#/components/parameters/CommunityId"}], responses: { "201": { description: Created } } }
+    get: { operationId: listJoinRequests, parameters: [{$ref: "#/components/parameters/CommunityId"}], responses: { "200": { description: Requests } } }
+  /v1/communities/{communityId}/join-requests/{requestId}/approve:
+    post: { operationId: approveJoinRequest, parameters: [{$ref: "#/components/parameters/CommunityId"}, {$ref: "#/components/parameters/RequestId"}], responses: { "200": { description: Approved } } }
+  /v1/communities/{communityId}/members:
+    get: { operationId: listMembers, parameters: [{$ref: "#/components/parameters/CommunityId"}], responses: { "200": { description: Members } } }
+  /v1/communities/{communityId}/members/{memberId}/revoke:
+    post: { operationId: revokeMember, parameters: [{$ref: "#/components/parameters/CommunityId"}, {$ref: "#/components/parameters/MemberId"}], responses: { "200": { description: Revoked } } }
+  /v1/nodes:
+    post: { operationId: registerNode, responses: { "201": { description: Registered } } }
+  /v1/nodes/candidates:
+    get: { operationId: listNodeCandidates, responses: { "200": { description: Candidates } } }
+  /v1/nodes/{nodeId}:
+    get: { operationId: getNode, parameters: [{$ref: "#/components/parameters/NodeId"}], responses: { "200": { description: Node } } }
+  /v1/nodes/{nodeId}/heartbeat:
+    post: { operationId: heartbeatNode, parameters: [{$ref: "#/components/parameters/NodeId"}], responses: { "200": { description: Accepted } } }
+  /v1/nodes/{nodeId}/disable:
+    post: { operationId: disableNode, parameters: [{$ref: "#/components/parameters/NodeId"}], responses: { "200": { description: Disabled } } }
+  /v1/nodes/{nodeId}/tasks:
+    get: { operationId: listNodeTasks, parameters: [{$ref: "#/components/parameters/NodeId"}], responses: { "200": { description: Tasks } } }
+  /v1/vaults/{vaultId}/catalog-pointer:
+    put: { operationId: updateCatalogPointer, parameters: [{$ref: "#/components/parameters/VaultId"}], responses: { "200": { description: Updated } } }
+    get: { operationId: getCatalogPointer, parameters: [{$ref: "#/components/parameters/VaultId"}], responses: { "200": { description: Pointer } } }
+  /v1/objects:
+    post: { operationId: registerObject, responses: { "201": { description: Registered } } }
+  /v1/objects/{cid}:
+    get: { operationId: getObjectMetadata, parameters: [{$ref: "#/components/parameters/Cid"}], responses: { "200": { description: Metadata } } }
+  /v1/objects/{cid}/placements:
+    post: { operationId: addPlacement, parameters: [{$ref: "#/components/parameters/Cid"}], responses: { "201": { description: Created } } }
+    get: { operationId: listPlacements, parameters: [{$ref: "#/components/parameters/Cid"}], responses: { "200": { description: Placements } } }
+  /v1/placements/{placementId}/failed:
+    post: { operationId: failPlacement, parameters: [{$ref: "#/components/parameters/PlacementId"}], responses: { "200": { description: Failed } } }
+  /v1/tasks/{taskId}/accept:
+    post: { operationId: acceptTask, parameters: [{$ref: "#/components/parameters/TaskId"}], responses: { "200": { description: Accepted } } }
+  /v1/tasks/{taskId}/complete:
+    post: { operationId: completeTask, parameters: [{$ref: "#/components/parameters/TaskId"}], responses: { "200": { description: Completed } } }
+  /v1/tasks/{taskId}/fail:
+    post: { operationId: failTask, parameters: [{$ref: "#/components/parameters/TaskId"}], responses: { "200": { description: Failed } } }
+  /v1/credits/me:
+    get: { operationId: getMyCredit, responses: { "200": { description: Non-transferable balance } } }
+  /v1/credits/me/entries:
+    get: { operationId: listMyCreditEntries, responses: { "200": { description: Entries } } }
+  /v1/communities/{communityId}/credit-policy:
+    get: { operationId: getCreditPolicy, parameters: [{$ref: "#/components/parameters/CommunityId"}], responses: { "200": { description: Policy } } }
+  /v1/communities/{communityId}/proposals:
+    post: { operationId: createProposal, parameters: [{$ref: "#/components/parameters/CommunityId"}], responses: { "201": { description: Created } } }
+    get: { operationId: listProposals, parameters: [{$ref: "#/components/parameters/CommunityId"}], responses: { "200": { description: Proposals } } }
+  /v1/proposals/{proposalId}:
+    get: { operationId: getProposal, parameters: [{$ref: "#/components/parameters/ProposalId"}], responses: { "200": { description: Proposal } } }
+  /v1/proposals/{proposalId}/vote:
+    put: { operationId: castVote, parameters: [{$ref: "#/components/parameters/ProposalId"}], responses: { "200": { description: Recorded } } }
+  /v1/proposals/{proposalId}/result:
+    get: { operationId: getProposalResult, parameters: [{$ref: "#/components/parameters/ProposalId"}], responses: { "200": { description: One-member-one-vote result } } }
+  /v1/communities/{communityId}/audit-events:
+    get: { operationId: listAuditEvents, parameters: [{$ref: "#/components/parameters/CommunityId"}], responses: { "200": { description: Events } } }
+  /v1/communities/{communityId}/audit-anchors:
+    get: { operationId: listAuditAnchors, parameters: [{$ref: "#/components/parameters/CommunityId"}], responses: { "200": { description: Anchors } } }
+  /v1/internal/audit-anchors/run:
+    post: { operationId: runAuditAnchor, responses: { "202": { description: Scheduled }, "404": { description: Hidden unless locally authorized } } }
+components:
+  parameters:
+    CommunityId: { name: communityId, in: path, required: true, schema: { type: string } }
+    RequestId: { name: requestId, in: path, required: true, schema: { type: string } }
+    MemberId: { name: memberId, in: path, required: true, schema: { type: string } }
+    NodeId: { name: nodeId, in: path, required: true, schema: { type: string } }
+    VaultId: { name: vaultId, in: path, required: true, schema: { type: string } }
+    Cid: { name: cid, in: path, required: true, schema: { type: string, pattern: "^[0-9a-f]{64}$" } }
+    PlacementId: { name: placementId, in: path, required: true, schema: { type: string } }
+    TaskId: { name: taskId, in: path, required: true, schema: { type: string } }
+    ProposalId: { name: proposalId, in: path, required: true, schema: { type: string } }

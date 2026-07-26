@@ -5,12 +5,12 @@
   "packageManager": "pnpm@10.13.1",
   "scripts": {
     "dev": "cargo run -p arcane-mesh-cli -- doctor",
-    "lint": "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+    "lint": "pnpm --filter @arcane-commons/api lint && cargo clippy --workspace --all-targets --all-features -- -D warnings",
     "format:check": "cargo fmt --all -- --check",
-    "typecheck": "cargo check --workspace --all-features",
-    "test": "cargo test --workspace --all-features",
+    "typecheck": "pnpm --filter @arcane-commons/api typecheck && cargo check --workspace --all-features",
+    "test": "pnpm --filter @arcane-commons/api test && cargo test --workspace --all-features",
     "test:integration": "cargo run -p arcane-mesh-cli -- verify-mvp",
-    "build": "cargo build --workspace --all-features",
+    "build": "pnpm --filter @arcane-commons/api build && cargo build --workspace --all-features",
     "demo:up": "cargo run -p arcane-mesh-cli -- demo up",
     "demo:down": "cargo run -p arcane-mesh-cli -- demo down",
     "verify:mvp": "cargo run -p arcane-mesh-cli -- verify-mvp"
