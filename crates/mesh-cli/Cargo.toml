@@ -12,8 +12,11 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 arcane-mesh-core = { path = "../mesh-core" }
+arcane-mesh-control = { path = "../mesh-control" }
 arcane-mesh-node = { path = "../mesh-node" }
 arcane-mesh-testkit = { path = "../mesh-testkit" }
 clap.workspace = true
+rand_core.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true

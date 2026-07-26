@@ -29,3 +29,19 @@ pnpm verify:mvp
 
 No external deployment, account, token, relay, or blockchain is required.
 See `docs/EXECUTION_PLAN.md`, `docs/THREAT_MODEL.md`, and `docs/RECOVERY.md`.
+
+`pnpm verify:mvp` performs all fifteen local acceptance steps: fixture creation,
+owner-side encryption, three placements, source isolation, node outage, restore,
+deliberate corruption, healthy fallback and repair, provider earning, owner
+consumption, forbidden financial-route checks, one-member-one-vote, clean
+Recovery Kit restore, plaintext absence checks, and audit-chain/Merkle
+verification. Evidence is written to `.verify/verify-mvp-report.json`.
+
+The unsigned local desktop artifact is built with:
+
+```sh
+pnpm --filter @arcane-commons/desktop tauri build --no-bundle
+```
+
+The current release binary is placed under `target/release/`. It is an unaudited
+development artifact and must not be treated as the only copy of valuable data.

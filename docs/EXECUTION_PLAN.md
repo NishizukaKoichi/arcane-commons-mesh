@@ -59,3 +59,8 @@ also require static review, documentation, or local process history.
   recovery surfaces, generated platform icons, five safety-flow UI tests, and a
   successful unsigned local Tauri release build. Desktop and 390px mobile browser
   passes showed no horizontal overflow.
+- 2026-07-26: expanded `acmctl` to the specified command tree and replaced the
+  four-assertion verifier with all fifteen deterministic offline steps. The
+  verifier now emits machine-readable evidence for replication, outage,
+  corruption, repair, credit, forbidden routes, voting, clean recovery,
+  plaintext absence, and audit integrity.
