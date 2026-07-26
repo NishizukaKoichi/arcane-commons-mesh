@@ -84,3 +84,20 @@ also require static review, documentation, or local process history.
   Ed25519 catalog/vote/request signatures, binds request node IDs to iroh endpoint
   certificates using server time, and rejects repeated request IDs. API/D1,
   desktop, process demo, and durable storage findings remain open.
+- 2026-07-26: replaced the Worker memory repository with D1-backed signed
+  bootstrap, membership, sessions, replay rejection, node registry, placements,
+  tasks, credit, governance, audit chain, and daily anchors. A restart integration
+  test verifies persistence, authorization, audit credit, and repair placement.
+- 2026-07-26: added cumulative SQLite node quotas, symlink rejection, startup
+  reconciliation, corrupted-blob replacement, and one-chunk-at-a-time encryption.
+- 2026-07-26: added encrypted manifests, owner-signed encrypted catalogs, five-way
+  metadata replication, Recovery Kit catalog recovery, and real CLI vault
+  create/add/list/restore/delete/verify operations.
+- 2026-07-26: connected desktop Recovery Kit export, Stronghold secret
+  persistence, real file encryption, three/five replica storage, restore, retained
+  deletion, and dedicated provider configuration. Static sample files were
+  removed.
+- 2026-07-26: local demo now starts Worker/D1 plus four node processes, seeds a
+  root-signed Alice/Bob community and node registry, and cleans all `.demo` state.
+  `verify:mvp` sends ciphertext through process IPC and proves process outage and
+  corrupted-replica fallback rather than checking process liveness alone.
