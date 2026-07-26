@@ -118,6 +118,7 @@ const catalogCid = createHash("sha256").update(`catalog:${runId}`).digest("hex")
 const objectCid = createHash("sha256").update(`object:${runId}`).digest("hex");
 const vaultId = `vault-d1-${runId}`;
 const nodeId = `node-d1-${Date.now()}`;
+const repairNodeId = `node-repair-d1-${Date.now()}`;
 const proposalId = `proposal-d1-${Date.now()}`;
 try {
   const bootstrap = await request("/v1/communities", {
@@ -202,6 +203,45 @@ try {
   });
   if (registeredNode.response.status !== 201) {
     throw new Error(`node registration failed: ${JSON.stringify(registeredNode.body)}`);
+  }
+  const repairEndpoint = generateKeyPairSync("ed25519");
+  const repairEndpointPublicKey = rawPublicKey(repairEndpoint.publicKey);
+  const repairNodeMessage = [
+    "acm.node-certificate.v1",
+    repairNodeId,
+    communityId,
+    founderMemberId,
+    repairEndpointPublicKey,
+    "node",
+    10_000_000,
+    createdAt,
+    createdAt + 86400
+  ].join("|");
+  const registeredRepairNode = await request("/v1/nodes", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json"
+    },
+    body: JSON.stringify({
+      nodeId: repairNodeId,
+      communityId,
+      ownerMemberId: founderMemberId,
+      endpointPublicKey: repairEndpointPublicKey,
+      failureDomain: "d1-repair-domain",
+      region: "local",
+      maxStorageBytes: 10_000_000,
+      certificateSignature: base64Url(
+        sign(null, Buffer.from(repairNodeMessage), founder.privateKey)
+      ),
+      issuedAt: createdAt,
+      expiresAt: createdAt + 86400
+    })
+  });
+  if (registeredRepairNode.response.status !== 201) {
+    throw new Error(
+      `repair node registration failed: ${JSON.stringify(registeredRepairNode.body)}`
+    );
   }
 
   const catalogMessage = [
@@ -305,6 +345,22 @@ try {
   if (anchors.response.status !== 200 || anchors.body.anchors.length < 1) {
     throw new Error(`daily D1 anchor was not created: ${JSON.stringify(anchors.body)}`);
   }
+  const repairTasks = await request(`/v1/nodes/${repairNodeId}/tasks`, {
+    headers: { authorization: `Bearer ${token}` }
+  });
+  const repairTask = repairTasks.body.tasks.find((task) => task.taskKind === "repair_object");
+  if (!repairTask) {
+    throw new Error(`repair task was not scheduled: ${JSON.stringify(repairTasks.body)}`);
+  }
+  for (const action of ["accept", "complete"]) {
+    const transition = await request(`/v1/tasks/${repairTask.taskId}/${action}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` }
+    });
+    if (transition.response.status !== 200) {
+      throw new Error(`repair task ${action} failed: ${JSON.stringify(transition.body)}`);
+    }
+  }
 
   const proposal = await request(`/v1/communities/${communityId}/proposals`, {
     method: "POST",
@@ -370,7 +426,7 @@ try {
   const placements = await request(`/v1/objects/${objectCid}/placements`, {
     headers: { authorization: `Bearer ${token}` }
   });
-  if (placements.response.status !== 200 || placements.body.placements.length !== 1) {
+  if (placements.response.status !== 200 || placements.body.placements.length !== 2) {
     throw new Error(`placement did not persist: ${JSON.stringify(placements.body)}`);
   }
   const result = await request(`/v1/proposals/${proposalId}/result`, {

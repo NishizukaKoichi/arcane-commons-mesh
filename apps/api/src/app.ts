@@ -889,6 +889,26 @@ export function createApp(options: AppOptions = {}) {
             )
             .run();
         }
+        if (
+          action === "complete" &&
+          task.task_kind === "repair_object" &&
+          task.object_cid
+        ) {
+          await context.env.DB.prepare(
+            `INSERT INTO placements
+             (placement_id, object_cid, node_id, status, created_at)
+             VALUES (?, ?, ?, 'healthy', ?)
+             ON CONFLICT(object_cid, node_id)
+             DO UPDATE SET status = 'healthy'`
+          )
+            .bind(
+              `repair:${taskId}`,
+              task.object_cid,
+              task.node_id,
+              now()
+            )
+            .run();
+        }
         if (action !== "accept") {
           await appendAuditEvent(context.env.DB, {
             communityId: principal.communityId,
