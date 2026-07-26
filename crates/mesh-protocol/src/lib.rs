@@ -55,7 +55,28 @@ pub enum ProtocolError {
 }
 
 impl Request {
-    pub fn validate(&self, now: i64, frame_size: usize) -> Result<(), ProtocolError> {
+    pub fn signing_bytes(&self, payload_cid: &str) -> Vec<u8> {
+        format!(
+            "acm.request.v1|{}|{}|{}|{}|{:?}|{}|{}|{}|{}",
+            self.protocol_version,
+            self.request_id,
+            self.community_id,
+            self.node_id,
+            self.operation,
+            self.object_cid.as_deref().unwrap_or(""),
+            self.issued_at,
+            self.expires_at,
+            payload_cid
+        )
+        .into_bytes()
+    }
+
+    pub fn validate(
+        &self,
+        expected_community_root: &[u8; 32],
+        now: i64,
+        frame_size: usize,
+    ) -> Result<(), ProtocolError> {
         if self.protocol_version != 1 {
             return Err(ProtocolError::Version);
         }
@@ -79,7 +100,12 @@ impl Request {
             return Err(ProtocolError::ObjectCid);
         }
         self.credential
-            .verify(&self.community_id, now, REQUEST_TTL_SECONDS)
+            .verify_trusted(
+                &self.community_id,
+                expected_community_root,
+                now,
+                REQUEST_TTL_SECONDS,
+            )
             .map_err(|_| ProtocolError::Credential)?;
         let roles = &self.credential.claims.roles;
         let allowed = match self.operation {
@@ -134,19 +160,20 @@ mod tests {
 
     #[test]
     fn enforces_operation_roles_and_limits() {
+        let root = Identity::from_seed([1; 32]).public_key();
         assert!(request(Operation::PutObject, &["node"])
-            .validate(150, 1024)
+            .validate(&root, 150, 1024)
             .is_ok());
         assert!(matches!(
-            request(Operation::PutObject, &["member"]).validate(150, 1024),
+            request(Operation::PutObject, &["member"]).validate(&root, 150, 1024),
             Err(ProtocolError::Unauthorized)
         ));
         assert!(matches!(
-            request(Operation::AuditObject, &["node"]).validate(150, 1024),
+            request(Operation::AuditObject, &["node"]).validate(&root, 150, 1024),
             Err(ProtocolError::Unauthorized)
         ));
         assert!(matches!(
-            request(Operation::GetObject, &["member"]).validate(150, MAX_FRAME_BYTES + 1),
+            request(Operation::GetObject, &["member"]).validate(&root, 150, MAX_FRAME_BYTES + 1),
             Err(ProtocolError::Oversized)
         ));
     }

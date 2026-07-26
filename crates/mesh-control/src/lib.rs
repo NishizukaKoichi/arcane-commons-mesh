@@ -132,6 +132,30 @@ pub struct VoteResult {
     pub eligible_members: u64,
 }
 
+impl CatalogPointer {
+    pub fn signing_bytes(&self) -> Vec<u8> {
+        format!(
+            "acm.catalog-pointer.v1|{}|{}|{}|{}|{}",
+            self.vault_id,
+            self.catalog_cid,
+            self.version,
+            self.previous_cid.as_deref().unwrap_or(""),
+            self.signed_at
+        )
+        .into_bytes()
+    }
+}
+
+impl Vote {
+    pub fn signing_bytes(&self) -> Vec<u8> {
+        format!(
+            "acm.vote.v1|{}|{}|{:?}|{}",
+            self.proposal_id, self.member_id, self.choice, self.cast_at
+        )
+        .into_bytes()
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CommunitySnapshot {
     pub format_version: u16,
@@ -170,7 +194,12 @@ impl LocalControlPlane {
     pub fn bootstrap(community: Community, founder: Member) -> Result<Self, ControlError> {
         founder
             .credential
-            .verify(&community.community_id, community.created_at, 300)
+            .verify_trusted(
+                &community.community_id,
+                &community.root_public_key,
+                community.created_at,
+                300,
+            )
             .map_err(|_| ControlError::InvalidSignature)?;
         if founder.public_key != founder.credential.claims.member_public_key
             || founder.member_id != founder.credential.claims.member_id
@@ -241,7 +270,12 @@ impl LocalControlPlane {
     pub fn add_member(&mut self, member: Member, now: i64) -> Result<(), ControlError> {
         member
             .credential
-            .verify(&self.community.community_id, now, 300)
+            .verify_trusted(
+                &self.community.community_id,
+                &self.community.root_public_key,
+                now,
+                300,
+            )
             .map_err(|_| ControlError::InvalidSignature)?;
         if member.public_key != member.credential.claims.member_public_key
             || member.member_id != member.credential.claims.member_id
@@ -339,9 +373,14 @@ impl LocalControlPlane {
         pointer: CatalogPointer,
     ) -> Result<(), ControlError> {
         self.require_active_member(actor_member_id)?;
-        if pointer.owner_signature.len() != 64 {
-            return Err(ControlError::InvalidSignature);
-        }
+        let member = self
+            .members
+            .get(actor_member_id)
+            .ok_or(ControlError::Unauthorized)?;
+        member
+            .credential
+            .verify_member_signature(&pointer.signing_bytes(), &pointer.owner_signature)
+            .map_err(|_| ControlError::InvalidSignature)?;
         if let Some(previous) = self.catalog_pointers.get(&pointer.vault_id) {
             if pointer.version != previous.version + 1
                 || pointer.previous_cid.as_deref() != Some(previous.catalog_cid.as_str())
@@ -411,12 +450,17 @@ impl LocalControlPlane {
             .proposals
             .get(&vote.proposal_id)
             .ok_or(ControlError::NotFound)?;
-        if vote.cast_at < proposal.opens_at
-            || vote.cast_at > proposal.closes_at
-            || vote.member_signature.len() != 64
-        {
+        if vote.cast_at < proposal.opens_at || vote.cast_at > proposal.closes_at {
             return Err(ControlError::State);
         }
+        let member = self
+            .members
+            .get(&vote.member_id)
+            .ok_or(ControlError::Unauthorized)?;
+        member
+            .credential
+            .verify_member_signature(&vote.signing_bytes(), &vote.member_signature)
+            .map_err(|_| ControlError::InvalidSignature)?;
         self.append_audit(
             vote.cast_at,
             "vote_cast",
@@ -578,27 +622,56 @@ mod tests {
     }
 
     #[test]
+    fn rejects_self_issued_membership_for_an_existing_community() {
+        let (mut control, _, _) = control();
+        let attacker = Identity::from_seed([8; 32]);
+        let forged = member(&attacker, &attacker, 99, &["member", "admin"]);
+        assert!(matches!(
+            control.add_member(forged, 150),
+            Err(ControlError::InvalidSignature)
+        ));
+    }
+
+    #[test]
     fn catalog_rejects_rollback_and_fork() {
         let (mut control, _, founder) = control();
-        let first = CatalogPointer {
+        let mut first = CatalogPointer {
             vault_id: "vault".into(),
             catalog_cid: "a".repeat(64),
             version: 1,
             previous_cid: None,
             signed_at: 110,
-            owner_signature: vec![1; 64],
+            owner_signature: Vec::new(),
         };
+        first.owner_signature = founder.sign(&first.signing_bytes()).to_vec();
         control
             .update_catalog_pointer(&founder.member_id(), first)
             .unwrap();
-        let fork = CatalogPointer {
+        let mut tampered = CatalogPointer {
             vault_id: "vault".into(),
             catalog_cid: "b".repeat(64),
-            version: 1,
-            previous_cid: None,
+            version: 2,
+            previous_cid: Some("a".repeat(64)),
             signed_at: 111,
-            owner_signature: vec![2; 64],
+            owner_signature: vec![0; 64],
         };
+        assert!(matches!(
+            control.update_catalog_pointer(&founder.member_id(), tampered.clone()),
+            Err(ControlError::InvalidSignature)
+        ));
+        tampered.owner_signature = founder.sign(&tampered.signing_bytes()).to_vec();
+        control
+            .update_catalog_pointer(&founder.member_id(), tampered)
+            .unwrap();
+        let mut fork = CatalogPointer {
+            vault_id: "vault".into(),
+            catalog_cid: "c".repeat(64),
+            version: 2,
+            previous_cid: Some("a".repeat(64)),
+            signed_at: 112,
+            owner_signature: Vec::new(),
+        };
+        fork.owner_signature = founder.sign(&fork.signing_bytes()).to_vec();
         assert!(matches!(
             control.update_catalog_pointer(&founder.member_id(), fork),
             Err(ControlError::State)
@@ -628,15 +701,15 @@ mod tests {
             )
             .unwrap();
         for (choice, time) in [(VoteChoice::Yes, 170), (VoteChoice::No, 180)] {
-            control
-                .cast_vote(Vote {
-                    proposal_id: "proposal".into(),
-                    member_id: bob.member_id(),
-                    choice,
-                    cast_at: time,
-                    member_signature: vec![1; 64],
-                })
-                .unwrap();
+            let mut vote = Vote {
+                proposal_id: "proposal".into(),
+                member_id: bob.member_id(),
+                choice,
+                cast_at: time,
+                member_signature: Vec::new(),
+            };
+            vote.member_signature = bob.sign(&vote.signing_bytes()).to_vec();
+            control.cast_vote(vote).unwrap();
         }
         let result = control.vote_result("proposal").unwrap();
         assert_eq!((result.yes, result.no, result.abstain), (0, 1, 0));

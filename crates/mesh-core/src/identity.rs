@@ -142,6 +142,38 @@ impl MembershipCredential {
         key.verify(&self.claims.canonical_bytes(), &signature)
             .map_err(|_| IdentityError::Signature)
     }
+
+    pub fn verify_trusted(
+        &self,
+        community_id: &str,
+        expected_issuer_public_key: &[u8; 32],
+        now: i64,
+        clock_skew_seconds: i64,
+    ) -> Result<(), IdentityError> {
+        if &self.claims.issuer_public_key != expected_issuer_public_key {
+            return Err(IdentityError::Signature);
+        }
+        let expected_member_id = format!(
+            "mem_{}",
+            blake3::hash(&self.claims.member_public_key).to_hex()
+        );
+        if self.claims.member_id != expected_member_id {
+            return Err(IdentityError::Domain);
+        }
+        self.verify(community_id, now, clock_skew_seconds)
+    }
+
+    pub fn verify_member_signature(
+        &self,
+        message: &[u8],
+        signature: &[u8],
+    ) -> Result<(), IdentityError> {
+        let key = VerifyingKey::from_bytes(&self.claims.member_public_key)
+            .map_err(|_| IdentityError::PublicKey)?;
+        let signature = Signature::from_slice(signature).map_err(|_| IdentityError::Signature)?;
+        key.verify(message, &signature)
+            .map_err(|_| IdentityError::Signature)
+    }
 }
 
 impl NodeCertificateClaims {
@@ -249,6 +281,9 @@ mod tests {
             valid.verify("community-a", 300, 5),
             Err(IdentityError::Time)
         ));
+        assert!(valid
+            .verify_trusted("community-a", &[1; 32], 150, 5)
+            .is_err());
         let mut changed = valid;
         changed.claims.roles.push("auditor".into());
         assert!(matches!(

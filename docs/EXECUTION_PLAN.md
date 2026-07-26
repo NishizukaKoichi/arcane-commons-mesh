@@ -79,3 +79,8 @@ also require static review, documentation, or local process history.
   endpoint identities, the `arcane-commons-mesh/1` ALPN, bounded frames,
   direct-first/network relay configuration, and a relay/discovery-free loopback
   integration test. Rust moved to 1.91, iroh's supported minimum.
+- 2026-07-26: final review found completion-blocking trust gaps. The first repair
+  binds membership credentials to the configured community root, verifies real
+  Ed25519 catalog/vote/request signatures, binds request node IDs to iroh endpoint
+  certificates using server time, and rejects repeated request IDs. API/D1,
+  desktop, process demo, and durable storage findings remain open.

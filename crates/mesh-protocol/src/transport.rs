@@ -2,6 +2,8 @@ use crate::{Request, MAX_FRAME_BYTES, PROTOCOL_ID};
 use arcane_mesh_core::identity::NodeCertificate;
 use iroh::{endpoint::presets, Endpoint, EndpointAddr};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
+use std::sync::Mutex;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::time::timeout;
@@ -11,6 +13,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WireFrame {
     pub request: Request,
+    pub request_signature: Vec<u8>,
     pub node_certificate: NodeCertificate,
     pub node_owner_public_key: [u8; 32],
     pub payload: Vec<u8>,
@@ -37,11 +40,15 @@ pub enum TransportError {
 /// enable direct dialing with encrypted relay fallback.
 pub struct IrohTransport {
     endpoint: Endpoint,
+    seen_request_ids: Mutex<BTreeSet<String>>,
 }
 
 impl IrohTransport {
     pub fn from_endpoint(endpoint: Endpoint) -> Self {
-        Self { endpoint }
+        Self {
+            endpoint,
+            seen_request_ids: Mutex::new(BTreeSet::new()),
+        }
     }
 
     pub async fn bind_local() -> Result<Self, TransportError> {
@@ -54,7 +61,10 @@ impl IrohTransport {
             .bind()
             .await
             .map_err(|error| TransportError::Iroh(error.to_string()))?;
-        Ok(Self { endpoint })
+        Ok(Self {
+            endpoint,
+            seen_request_ids: Mutex::new(BTreeSet::new()),
+        })
     }
 
     /// Binds the normal iroh endpoint: direct paths are preferred and encrypted
@@ -64,7 +74,10 @@ impl IrohTransport {
             .await
             .map_err(|error| TransportError::Iroh(error.to_string()))?;
         endpoint.set_alpns(vec![PROTOCOL_ID.as_bytes().to_vec()]);
-        Ok(Self { endpoint })
+        Ok(Self {
+            endpoint,
+            seen_request_ids: Mutex::new(BTreeSet::new()),
+        })
     }
 
     pub fn addr(&self) -> EndpointAddr {
@@ -101,7 +114,11 @@ impl IrohTransport {
         Ok(())
     }
 
-    pub async fn accept(&self) -> Result<WireFrame, TransportError> {
+    pub async fn accept(
+        &self,
+        expected_community_root: &[u8; 32],
+        now: i64,
+    ) -> Result<WireFrame, TransportError> {
         let incoming = timeout(CONNECT_TIMEOUT, self.endpoint.accept())
             .await
             .map_err(|_| TransportError::Timeout)?
@@ -127,10 +144,36 @@ impl IrohTransport {
                 &frame.node_owner_public_key,
                 &frame.request.community_id,
                 &remote_endpoint_id,
-                frame.request.issued_at,
+                now,
                 crate::REQUEST_TTL_SECONDS,
             )
             .map_err(|error| TransportError::Iroh(error.to_string()))?;
+        if frame.request.node_id != frame.node_certificate.claims.node_id {
+            return Err(TransportError::Iroh(
+                "request node does not match endpoint certificate".into(),
+            ));
+        }
+        frame
+            .request
+            .validate(expected_community_root, now, encoded.len())
+            .map_err(|error| TransportError::Iroh(error.to_string()))?;
+        let payload_cid = arcane_mesh_core::cid(&frame.payload);
+        frame
+            .request
+            .credential
+            .verify_member_signature(
+                &frame.request.signing_bytes(&payload_cid),
+                &frame.request_signature,
+            )
+            .map_err(|error| TransportError::Iroh(error.to_string()))?;
+        let inserted = self
+            .seen_request_ids
+            .lock()
+            .map_err(|_| TransportError::Iroh("request replay cache unavailable".into()))?
+            .insert(frame.request.request_id.clone());
+        if !inserted {
+            return Err(TransportError::Iroh("replayed request identifier".into()));
+        }
         connection.close(0_u8.into(), b"frame received");
         Ok(frame)
     }
@@ -194,21 +237,26 @@ mod tests {
         }
         .issue(&owner);
 
+        let request = request();
+        let payload = b"encrypted-object".to_vec();
+        let request_signature = Identity::from_seed([2; 32])
+            .sign(&request.signing_bytes(&arcane_mesh_core::cid(&payload)))
+            .to_vec();
         let expected = WireFrame {
-            request: request(),
+            request,
+            request_signature,
             node_certificate: certificate,
             node_owner_public_key: owner.public_key(),
-            payload: b"encrypted-object".to_vec(),
+            payload,
         };
         let sent = expected.clone();
-        let (received, send_result) =
-            tokio::join!(server.accept(), client.send(server_addr, &sent));
+        let community_root = Identity::from_seed([1; 32]).public_key();
+        let (received, send_result) = tokio::join!(
+            server.accept(&community_root, 150),
+            client.send(server_addr, &sent)
+        );
         send_result.unwrap();
         let received = received.unwrap();
-        received
-            .request
-            .validate(150, received.payload.len())
-            .unwrap();
         assert_eq!(received.payload, expected.payload);
 
         server.close().await;

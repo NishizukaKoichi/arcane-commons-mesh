@@ -199,13 +199,15 @@ pub fn verify_mvp() -> Result<()> {
         215,
     )?;
     for (choice, cast_at) in [(VoteChoice::Yes, 230), (VoteChoice::No, 240)] {
-        control.cast_vote(Vote {
+        let mut vote = Vote {
             proposal_id: "proposal-one-person-one-vote".into(),
             member_id: bob.member_id(),
             choice,
             cast_at,
-            member_signature: vec![7; 64],
-        })?;
+            member_signature: Vec::new(),
+        };
+        vote.member_signature = bob.sign(&vote.signing_bytes()).to_vec();
+        control.cast_vote(vote)?;
     }
     let votes = control.vote_result("proposal-one-person-one-vote")?;
     if (votes.yes, votes.no, control.vote_history_len()) != (0, 1, 2) {
