@@ -2,17 +2,23 @@ use anyhow::{bail, Context, Result};
 use arcane_mesh_control::{Community, LocalControlPlane, Member, Proposal, Vote, VoteChoice};
 use arcane_mesh_core::{
     audit::{merkle_root, verify_chain},
+    catalog::{
+        decrypt_and_verify_catalog, decrypt_manifest, encrypt_manifest, sign_and_encrypt_catalog,
+        CatalogFileVersion, FileManifest, VaultCatalog,
+    },
     cid,
     credit::{CreditEntry, CreditLedger, CreditReason},
-    crypto::{decrypt, encrypt, SecretKey},
+    crypto::{decrypt, SecretKey},
     identity::{Identity, MembershipClaims},
     recovery::{export, import, RecoveryPayload},
+    vault::{decrypt_stream, encrypt_stream},
 };
 use arcane_mesh_node::StorageNode;
 use arcane_mesh_testkit::InMemoryMesh;
 use serde::Serialize;
 use std::{
     fs,
+    io::Cursor,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::Arc,
@@ -58,17 +64,19 @@ pub fn verify_mvp() -> Result<()> {
     fs::write(&fixture_path, CONTENT_SENTINEL)?;
     pass(1, "deterministic fixture created");
 
-    let key = SecretKey::random();
-    let aad = format!(
-        "acm.chunk.v1|vault-test|file-v1|0|{}",
-        CONTENT_SENTINEL.len()
-    );
-    let envelope = encrypt(&key, CONTENT_SENTINEL, aad.as_bytes())?;
-    let blob = serde_json::to_vec(&envelope)?;
+    let vault_master_key = SecretKey::random();
+    let file_key = SecretKey::random();
+    let chunks = encrypt_stream(
+        &mut Cursor::new(CONTENT_SENTINEL),
+        &file_key,
+        "vault-test",
+        "file-v1",
+    )?;
+    let blob = serde_json::to_vec(&chunks[0].envelope)?;
     let object_cid = cid(&blob);
     pass(2, "fixture encrypted on owner device");
 
-    let nodes: Vec<_> = ["node-a", "node-b", "node-c", "node-d"]
+    let nodes: Vec<_> = ["node-a", "node-b", "node-c", "node-d", "node-e", "node-f"]
         .into_iter()
         .map(|name| {
             StorageNode::new(
@@ -82,8 +90,54 @@ pub fn verify_mvp() -> Result<()> {
         .collect::<Result<_, _>>()?;
     let mut mesh = InMemoryMesh::new(nodes.clone());
     let replicated_cid = mesh.replicate(&blob, 3)?;
+    let owner = Identity::from_seed([11; 32]);
+    let manifest = FileManifest {
+        manifest_version: 1,
+        file_id: "file-a".into(),
+        file_version_id: "file-v1".into(),
+        relative_path: ".".into(),
+        file_name: FILE_NAME_SENTINEL.into(),
+        mime_type: "application/octet-stream".into(),
+        plaintext_size: CONTENT_SENTINEL.len() as u64,
+        plaintext_hash: cid(CONTENT_SENTINEL),
+        modified_at: 100,
+        created_at: 100,
+        file_key: file_key.0,
+        ordered_chunk_cids: vec![object_cid.clone()],
+        chunk_plaintext_lengths: vec![CONTENT_SENTINEL.len() as u32],
+        padding_lengths: vec![0],
+    };
+    let manifest_blob = serde_json::to_vec(&encrypt_manifest(
+        &vault_master_key,
+        "vault-test",
+        &manifest,
+    )?)?;
+    let manifest_cid = mesh.replicate(&manifest_blob, 5)?;
+    let catalog_blob = serde_json::to_vec(&sign_and_encrypt_catalog(
+        &vault_master_key,
+        &owner,
+        VaultCatalog {
+            catalog_version: 1,
+            vault_id: "vault-test".into(),
+            owner_member_id: owner.member_id(),
+            previous_catalog_cid: None,
+            created_at: 100,
+            files: vec![CatalogFileVersion {
+                file_id: "file-a".into(),
+                file_version_id: "file-v1".into(),
+                encrypted_manifest_cid: manifest_cid.clone(),
+                created_at: 100,
+                deleted_at: None,
+                retention_until: None,
+            }],
+        },
+    )?)?;
+    let catalog_cid = mesh.replicate(&catalog_blob, 5)?;
     if replicated_cid != object_cid || mesh.audit_all(&object_cid) != 3 {
         bail!("step 3: three-replica assertion failed");
+    }
+    if mesh.audit_all(&manifest_cid) != 5 || mesh.audit_all(&catalog_cid) != 5 {
+        bail!("step 3: five-replica catalog or manifest assertion failed");
     }
     process_nodes.assert_running()?;
     pass(
@@ -107,9 +161,13 @@ pub fn verify_mvp() -> Result<()> {
         .restore(&object_cid)
         .context("step 6: restore with node B offline")?;
     let restored = decrypt(
-        &key,
+        &file_key,
         &serde_json::from_slice(&restored_blob)?,
-        aad.as_bytes(),
+        format!(
+            "acm.chunk.v1|vault-test|file-v1|0|{}",
+            CONTENT_SENTINEL.len()
+        )
+        .as_bytes(),
     )?;
     if restored != CONTENT_SENTINEL {
         bail!("step 6: outage restore plaintext hash mismatch");
@@ -129,9 +187,13 @@ pub fn verify_mvp() -> Result<()> {
         bail!("step 8: corrupt/offline replicas were not marked unhealthy");
     }
     let fallback = decrypt(
-        &key,
+        &file_key,
         &serde_json::from_slice(&mesh.restore(&object_cid)?)?,
-        aad.as_bytes(),
+        format!(
+            "acm.chunk.v1|vault-test|file-v1|0|{}",
+            CONTENT_SENTINEL.len()
+        )
+        .as_bytes(),
     )?;
     if fallback != CONTENT_SENTINEL {
         bail!("step 8: healthy fallback failed");
@@ -230,7 +292,7 @@ pub fn verify_mvp() -> Result<()> {
     let kit = export(
         &RecoveryPayload {
             identity_seed: [11; 32],
-            vault_master_key: key.0,
+            vault_master_key: vault_master_key.0,
             community_ids: vec!["local-community".into()],
             control_plane_urls: vec!["http://127.0.0.1:8787".into()],
         },
@@ -242,11 +304,48 @@ pub fn verify_mvp() -> Result<()> {
         bail!("step 13: recovery environment was not clean");
     }
     let recovered = import(&fs::read(&kit_path)?, b"local verification passphrase")?;
-    let recovered_key = SecretKey(recovered.vault_master_key);
-    let recovered_plaintext = decrypt(
-        &recovered_key,
-        &serde_json::from_slice(&mesh.restore(&object_cid)?)?,
-        aad.as_bytes(),
+    let recovered_master_key = SecretKey(recovered.vault_master_key);
+    let recovered_owner = Identity::from_seed(recovered.identity_seed);
+    let recovered_catalog = decrypt_and_verify_catalog(
+        &recovered_master_key,
+        "vault-test",
+        1,
+        &recovered_owner.public_key(),
+        &serde_json::from_slice(&mesh.restore(&catalog_cid)?)?,
+    )?;
+    let recovered_version = recovered_catalog
+        .catalog
+        .files
+        .first()
+        .context("step 13: recovered catalog contains no files")?;
+    let recovered_manifest = decrypt_manifest(
+        &recovered_master_key,
+        "vault-test",
+        &recovered_version.file_id,
+        &recovered_version.file_version_id,
+        &serde_json::from_slice(&mesh.restore(&recovered_version.encrypted_manifest_cid)?)?,
+    )?;
+    let recovered_chunks = recovered_manifest
+        .ordered_chunk_cids
+        .iter()
+        .enumerate()
+        .map(|(index, chunk_cid)| {
+            let envelope = serde_json::from_slice(&mesh.restore(chunk_cid)?)?;
+            Ok(arcane_mesh_core::vault::EncryptedChunk {
+                index: index as u64,
+                plaintext_length: recovered_manifest.chunk_plaintext_lengths[index],
+                cid: chunk_cid.clone(),
+                envelope,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut recovered_plaintext = Vec::new();
+    decrypt_stream(
+        &recovered_chunks,
+        &mut recovered_plaintext,
+        &SecretKey(recovered_manifest.file_key),
+        "vault-test",
+        &recovered_version.file_version_id,
     )?;
     if recovered.identity_seed != [11; 32] || recovered_plaintext != CONTENT_SENTINEL {
         bail!("step 13: clean recovery could not restore fixture");

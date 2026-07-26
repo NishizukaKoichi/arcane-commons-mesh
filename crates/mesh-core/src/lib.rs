@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod audit;
+pub mod catalog;
 pub mod credit;
 pub mod crypto;
 pub mod identity;
