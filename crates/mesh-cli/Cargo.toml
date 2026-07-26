@@ -1,0 +1,17 @@
+[package]
+name = "arcane-mesh-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "acmctl"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+arcane-mesh-core = { path = "../mesh-core" }
+clap.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
