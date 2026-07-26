@@ -139,10 +139,11 @@ pub fn verify_mvp() -> Result<()> {
     if mesh.audit_all(&manifest_cid) != 5 || mesh.audit_all(&catalog_cid) != 5 {
         bail!("step 3: five-replica catalog or manifest assertion failed");
     }
+    process_nodes.replicate(&object_cid, &blob, 3)?;
     process_nodes.assert_running()?;
     pass(
         3,
-        "ciphertext replicated to three failure domains; four node processes are live",
+        "ciphertext replicated through IPC to three live storage-node processes",
     );
 
     fs::remove_file(&fixture_path)?;
@@ -152,6 +153,7 @@ pub fn verify_mvp() -> Result<()> {
     pass(4, "original fixture isolated");
 
     nodes[1].set_active(false);
+    process_nodes.stop(1)?;
     if nodes[1].get(&object_cid).is_ok() {
         bail!("step 5: stopped node still served data");
     }
@@ -160,6 +162,9 @@ pub fn verify_mvp() -> Result<()> {
     let restored_blob = mesh
         .restore(&object_cid)
         .context("step 6: restore with node B offline")?;
+    if process_nodes.restore(&object_cid)? != blob {
+        bail!("step 6: process-node outage restore mismatch");
+    }
     let restored = decrypt(
         &file_key,
         &serde_json::from_slice(&restored_blob)?,
@@ -172,12 +177,16 @@ pub fn verify_mvp() -> Result<()> {
     if restored != CONTENT_SENTINEL {
         bail!("step 6: outage restore plaintext hash mismatch");
     }
-    pass(6, "restored through one-node outage");
+    pass(
+        6,
+        "restored from a separate process through one-node outage",
+    );
 
     let node_c_path = object_path(nodes[2].root(), &object_cid);
     let mut corrupt = fs::read(&node_c_path)?;
     corrupt[0] ^= 1;
     fs::write(&node_c_path, corrupt)?;
+    process_nodes.corrupt(2, &object_cid)?;
     if nodes[2].get(&object_cid).is_ok() {
         bail!("step 7: corrupted replica was accepted");
     }
@@ -198,13 +207,16 @@ pub fn verify_mvp() -> Result<()> {
     if fallback != CONTENT_SENTINEL {
         bail!("step 8: healthy fallback failed");
     }
+    if process_nodes.restore(&object_cid)? != blob {
+        bail!("step 8: process-node corrupted replica fallback failed");
+    }
     nodes[1].set_active(true);
     if mesh.repair(&object_cid, 3)? < 3 {
         bail!("step 8: repair did not restore target");
     }
     pass(
         8,
-        "corruption rejected, fallback restored, replicas repaired",
+        "process/in-memory corruption rejected, fallback restored, replicas repaired",
     );
 
     let (mut control, root, alice, alice_member) = control_plane()?;
@@ -503,7 +515,8 @@ fn write_report(report: &VerificationReport) -> Result<()> {
 }
 
 struct ProcessNodes {
-    children: Vec<Child>,
+    children: Vec<Option<Child>>,
+    roots: Vec<PathBuf>,
 }
 
 impl ProcessNodes {
@@ -511,10 +524,12 @@ impl ProcessNodes {
         fs::create_dir_all(&root)?;
         let executable = std::env::current_exe()?;
         let mut children = Vec::new();
+        let mut roots = Vec::new();
         for name in ["storage-a", "storage-b", "storage-c", "auditor"] {
             let node_root = root.join(name);
             fs::create_dir_all(&node_root)?;
-            children.push(
+            roots.push(node_root.clone());
+            children.push(Some(
                 Command::new(&executable)
                     .args(["node", "run"])
                     .arg(&node_root)
@@ -523,18 +538,18 @@ impl ProcessNodes {
                     .stderr(Stdio::null())
                     .spawn()
                     .with_context(|| format!("could not start process node {name}"))?,
-            );
+            ));
         }
         for _ in 0..50 {
             if ["storage-a", "storage-b", "storage-c", "auditor"]
                 .iter()
                 .all(|name| root.join(name).join("ready").exists())
             {
-                return Ok(Self { children });
+                return Ok(Self { children, roots });
             }
             thread::sleep(Duration::from_millis(100));
         }
-        for child in &mut children {
+        for child in children.iter_mut().flatten() {
             let _ = child.kill();
             let _ = child.wait();
         }
@@ -545,19 +560,99 @@ impl ProcessNodes {
         if self
             .children
             .iter_mut()
+            .flatten()
             .any(|child| child.try_wait().ok().flatten().is_some())
         {
             bail!("a local node process exited before verification completed");
         }
         Ok(())
     }
+
+    fn replicate(&self, object_cid: &str, bytes: &[u8], target: usize) -> Result<()> {
+        for index in 0..target {
+            self.put(index, object_cid, bytes)?;
+        }
+        Ok(())
+    }
+
+    fn put(&self, index: usize, object_cid: &str, bytes: &[u8]) -> Result<()> {
+        let request_root = self.roots[index].join("ipc").join("requests");
+        let response_root = self.roots[index].join("ipc").join("responses");
+        fs::create_dir_all(&request_root)?;
+        fs::create_dir_all(&response_root)?;
+        let response = response_root.join(format!("put-{object_cid}.ok"));
+        let error = response_root.join(format!("put-{object_cid}.err"));
+        let temporary = request_root.join(format!(".put-{object_cid}.partial"));
+        let request = request_root.join(format!("put-{object_cid}.blob"));
+        fs::write(&temporary, bytes)?;
+        fs::rename(temporary, request)?;
+        wait_for_path(&response, &error)?;
+        fs::remove_file(response)?;
+        Ok(())
+    }
+
+    fn restore(&self, object_cid: &str) -> Result<Vec<u8>> {
+        for (index, child) in self.children.iter().enumerate() {
+            if child.is_none() {
+                continue;
+            }
+            let request_root = self.roots[index].join("ipc").join("requests");
+            let response_root = self.roots[index].join("ipc").join("responses");
+            fs::create_dir_all(&request_root)?;
+            fs::create_dir_all(&response_root)?;
+            let response = response_root.join(format!("get-{object_cid}.blob"));
+            let error = response_root.join(format!("get-{object_cid}.err"));
+            fs::write(request_root.join(format!("get-{object_cid}.req")), b"")?;
+            if wait_for_path(&response, &error).is_ok() && response.exists() {
+                let bytes = fs::read(&response)?;
+                fs::remove_file(response)?;
+                if cid(&bytes) == object_cid {
+                    return Ok(bytes);
+                }
+            }
+            if error.exists() {
+                fs::remove_file(error)?;
+            }
+        }
+        bail!("no healthy process-node replica")
+    }
+
+    fn stop(&mut self, index: usize) -> Result<()> {
+        let mut child = self.children[index]
+            .take()
+            .context("process node already stopped")?;
+        child.kill()?;
+        child.wait()?;
+        Ok(())
+    }
+
+    fn corrupt(&self, index: usize, object_cid: &str) -> Result<()> {
+        let path = object_path(&self.roots[index], object_cid);
+        let mut bytes = fs::read(&path)?;
+        bytes[0] ^= 1;
+        fs::write(path, bytes)?;
+        Ok(())
+    }
 }
 
 impl Drop for ProcessNodes {
     fn drop(&mut self) {
-        for child in &mut self.children {
+        for child in self.children.iter_mut().flatten() {
             let _ = child.kill();
             let _ = child.wait();
         }
     }
+}
+
+fn wait_for_path(success: &Path, error: &Path) -> Result<()> {
+    for _ in 0..100 {
+        if success.exists() {
+            return Ok(());
+        }
+        if error.exists() {
+            bail!("process node rejected object request");
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    bail!("process node request timed out")
 }

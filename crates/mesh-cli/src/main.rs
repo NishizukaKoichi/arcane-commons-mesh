@@ -244,7 +244,7 @@ fn node(command: NodeCommand) -> Result<()> {
                 .and_then(|value| value.to_str())
                 .unwrap_or("storage-node")
                 .to_owned();
-            let _node = StorageNode::new(
+            let node = StorageNode::new(
                 &node_id,
                 format!("local-{node_id}"),
                 &canonical,
@@ -256,7 +256,8 @@ fn node(command: NodeCommand) -> Result<()> {
             println!("status=running");
             loop {
                 fs::write(canonical.join("heartbeat"), unix_timestamp()?.to_string())?;
-                thread::sleep(Duration::from_secs(1));
+                service_node_requests(&node, &canonical)?;
+                thread::sleep(Duration::from_millis(50));
             }
         }
         NodeCommand::Status { root } => {
@@ -521,6 +522,40 @@ fn seed_demo_control_plane() -> Result<()> {
         .context("could not seed local demo control plane")?;
     if !status.success() {
         bail!("local demo control-plane seed failed");
+    }
+    Ok(())
+}
+
+fn service_node_requests(node: &StorageNode, root: &Path) -> Result<()> {
+    let requests = root.join("ipc").join("requests");
+    let responses = root.join("ipc").join("responses");
+    fs::create_dir_all(&requests)?;
+    fs::create_dir_all(&responses)?;
+    for entry in fs::read_dir(&requests)? {
+        let path = entry?.path();
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if let Some(object_cid) = name
+            .strip_prefix("put-")
+            .and_then(|value| value.strip_suffix(".blob"))
+        {
+            let result = node.put(object_cid, &fs::read(&path)?);
+            let suffix = if result.is_ok() { "ok" } else { "err" };
+            fs::write(responses.join(format!("put-{object_cid}.{suffix}")), b"")?;
+            fs::remove_file(path)?;
+        } else if let Some(object_cid) = name
+            .strip_prefix("get-")
+            .and_then(|value| value.strip_suffix(".req"))
+        {
+            match node.get(object_cid) {
+                Ok(bytes) => fs::write(responses.join(format!("get-{object_cid}.blob")), bytes)?,
+                Err(_) => fs::write(responses.join(format!("get-{object_cid}.err")), b"")?,
+            }
+            fs::remove_file(path)?;
+        } else {
+            fs::remove_file(path)?;
+        }
     }
     Ok(())
 }
