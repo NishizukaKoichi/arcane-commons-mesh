@@ -8,7 +8,7 @@
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "build": "wrangler deploy --dry-run --outdir dist"
+    "build": "wrangler deploy --dry-run --env=\"\" --outdir dist"
   },
   "dependencies": {
     "@hono/zod-validator": "0.9.0",

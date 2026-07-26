@@ -14,5 +14,21 @@
   ],
   "triggers": {
     "crons": ["0 */6 * * *"]
+  },
+  "env": {
+    "production": {
+      "name": "arcane-commons-mesh-api-production",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "arcane-commons-mesh-production",
+          "database_id": "CLOUDFLARE_D1_DATABASE_ID",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "triggers": {
+        "crons": ["0 */6 * * *"]
+      }
+    }
   }
 }

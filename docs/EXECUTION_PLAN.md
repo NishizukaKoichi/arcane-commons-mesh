@@ -68,3 +68,7 @@ also require static review, documentation, or local process history.
   limitations/status page, public boundary summary, and local-build download
   guidance. It has no authentication, secrets, analytics, or remote runtime and
   was not deployed.
+- 2026-07-26: added SHA-pinned CI, isolated local-MVP integration, unsigned
+  macOS desktop build, and manually approved Cloudflare deployment workflows.
+  Local pnpm and RustSec audits found no known vulnerability; RustSec reported
+  transitive maintenance/unsoundness warnings in the Tauri Linux GTK3 tree.
