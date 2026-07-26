@@ -149,10 +149,13 @@ name = "arcane-mesh-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "arcane-mesh-control",
  "arcane-mesh-core",
  "arcane-mesh-node",
  "arcane-mesh-testkit",
  "clap",
+ "rand_core 0.6.4",
+ "serde",
  "serde_json",
  "tempfile",
 ]
