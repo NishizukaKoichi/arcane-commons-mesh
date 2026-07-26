@@ -72,3 +72,6 @@ also require static review, documentation, or local process history.
   macOS desktop build, and manually approved Cloudflare deployment workflows.
   Local pnpm and RustSec audits found no known vulnerability; RustSec reported
   transitive maintenance/unsoundness warnings in the Tauri Linux GTK3 tree.
+- 2026-07-26: implemented the validated `AuditAnchorAdapter` boundary with an
+  append-only local JSONL file, a D1 writer adapter, deterministic mock, and an
+  interface-only future EVM encoder. No RPC, wallet, key, or contract exists.
