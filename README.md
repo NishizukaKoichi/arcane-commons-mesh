@@ -37,13 +37,45 @@ consumption, forbidden financial-route checks, one-member-one-vote, clean
 Recovery Kit restore, plaintext absence checks, and audit-chain/Merkle
 verification. Evidence is written to `.verify/verify-mvp-report.json`.
 
+## Run the local demo
+
+```sh
+pnpm demo:up
+curl http://127.0.0.1:8787/health
+pnpm demo:down
+```
+
+This starts a local Worker with D1, three storage node processes, and one auditor
+process. All state and logs stay under `.demo/`. `demo:down` stops recorded
+processes and removes that directory.
+
+## Exercise the encrypted CLI vault
+
+Vault commands read the passphrase from standard input. This example uses a
+shell prompt so the passphrase is not placed in command history:
+
+```sh
+read -s ACM_PASSPHRASE
+printf '%s\n' "$ACM_PASSPHRASE" | cargo run -p arcane-mesh-cli -- vault create
+printf '%s\n' "$ACM_PASSPHRASE" | cargo run -p arcane-mesh-cli -- vault add ./example.pdf
+printf '%s\n' "$ACM_PASSPHRASE" | cargo run -p arcane-mesh-cli -- vault list
+unset ACM_PASSPHRASE
+```
+
+Local vault state stays in ignored `.acm/`. Data chunks use three replicas;
+encrypted manifests and signed encrypted catalogs use five. Keep the generated
+Recovery Kit somewhere separate from the computer.
+
 The unsigned local desktop artifact is built with:
 
 ```sh
 pnpm --filter @arcane-commons/desktop tauri build --no-bundle
 ```
 
-The current release binary is placed under `target/release/`. It is an unaudited
+The current release binary is placed under `target/release/`. Onboarding writes
+an encrypted Recovery Kit to Downloads and stores identity/vault keys in a
+Stronghold snapshot. Real file additions are streamed, encrypted, and replicated.
+It is an unaudited
 development artifact and must not be treated as the only copy of valuable data.
 
 The local public-information site is built as static files with:
