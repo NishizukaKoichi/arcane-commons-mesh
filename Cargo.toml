@@ -5,7 +5,8 @@ members = [
   "crates/mesh-node",
   "crates/mesh-testkit",
   "crates/mesh-control",
-  "crates/mesh-cli"
+  "crates/mesh-cli",
+  "apps/desktop/src-tauri"
 ]
 resolver = "2"
 
@@ -28,3 +29,6 @@ serde_json = "1.0.140"
 tempfile = "3.20.0"
 thiserror = "2.0.12"
 zeroize = { version = "1.8.1", features = ["derive"] }
+
+[profile.dev.package.scrypt]
+opt-level = 3

@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-capability",
+  "description": "Minimum permissions for the main Arcane Commons Mesh window",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "stronghold:default"
+  ]
+}

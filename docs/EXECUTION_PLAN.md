@@ -54,3 +54,8 @@ also require static review, documentation, or local process history.
   OpenAPI surface, Ed25519 challenge verification, replay/expiry tests,
   one-member-one-vote API tests, forbidden financial-route tests, and Wrangler
   dry-run build. No external deployment was performed.
+- 2026-07-26: added the Tauri 2/React desktop, Stronghold initialization,
+  responsive Japanese-first onboarding/dashboard/vault/provider/community/
+  recovery surfaces, generated platform icons, five safety-flow UI tests, and a
+  successful unsigned local Tauri release build. Desktop and 390px mobile browser
+  passes showed no horizontal overflow.
