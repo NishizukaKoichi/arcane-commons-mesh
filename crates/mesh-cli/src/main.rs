@@ -311,17 +311,8 @@ fn demo(command: DemoCommand) -> Result<()> {
             }
             wait_for_demo_nodes(&demo_root)?;
             wait_for_worker()?;
+            seed_demo_control_plane()?;
             fs::write(&record_path, serde_json::to_vec_pretty(&records)?)?;
-            fs::write(
-                demo_root.join("community.json"),
-                serde_json::to_vec_pretty(&serde_json::json!({
-                    "community": "local-demo",
-                    "members": ["Alice", "Bob"],
-                    "storageNodes": ["storage-a", "storage-b", "storage-c"],
-                    "auditor": "auditor",
-                    "plaintextFixtureIncluded": false
-                }))?,
-            )?;
             println!("demo_root={}", fs::canonicalize(&demo_root)?.display());
             println!("storage_nodes=3");
             println!("auditor_nodes=1");
@@ -521,4 +512,15 @@ fn wait_for_worker() -> Result<()> {
         thread::sleep(Duration::from_millis(100));
     }
     bail!("local Worker did not become ready")
+}
+
+fn seed_demo_control_plane() -> Result<()> {
+    let status = ProcessCommand::new("node")
+        .arg("apps/api/test/demo-seed.mjs")
+        .status()
+        .context("could not seed local demo control plane")?;
+    if !status.success() {
+        bail!("local demo control-plane seed failed");
+    }
+    Ok(())
 }
