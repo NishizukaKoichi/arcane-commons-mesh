@@ -74,6 +74,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arcane-mesh-core",
+ "arcane-mesh-node",
+ "arcane-mesh-testkit",
  "clap",
  "serde_json",
  "tempfile",
@@ -93,6 +95,35 @@ dependencies = [
  "tempfile",
  "thiserror",
  "zeroize",
+]
+
+[[package]]
+name = "arcane-mesh-node"
+version = "0.1.0"
+dependencies = [
+ "arcane-mesh-core",
+ "arcane-mesh-protocol",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "arcane-mesh-protocol"
+version = "0.1.0"
+dependencies = [
+ "arcane-mesh-core",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
+name = "arcane-mesh-testkit"
+version = "0.1.0"
+dependencies = [
+ "arcane-mesh-core",
+ "arcane-mesh-node",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]

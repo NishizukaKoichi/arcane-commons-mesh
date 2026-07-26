@@ -43,3 +43,6 @@ also require static review, documentation, or local process history.
 - 2026-07-26: added constant-memory chunk streaming boundaries, deterministic
   domain-separated membership signing, audit hash chain/Merkle root, and
   idempotent integer storage-credit arithmetic. Network/API adapters remain next.
+- 2026-07-26: separated protocol, storage-node, and testkit crates. The in-memory
+  mesh now enforces independent failure domains and tests three replicas, outage
+  restore, corrupted-replica rejection, audit health, and encrypted repair.

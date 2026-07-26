@@ -1,0 +1,11 @@
+[package]
+name = "arcane-mesh-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+arcane-mesh-core = { path = "../mesh-core" }
+serde.workspace = true
+thiserror.workspace = true

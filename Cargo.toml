@@ -1,6 +1,9 @@
 [workspace]
 members = [
   "crates/mesh-core",
+  "crates/mesh-protocol",
+  "crates/mesh-node",
+  "crates/mesh-testkit",
   "crates/mesh-cli"
 ]
 resolver = "2"

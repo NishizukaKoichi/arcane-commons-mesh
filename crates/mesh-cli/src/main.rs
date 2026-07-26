@@ -5,10 +5,11 @@ use arcane_mesh_core::{
     cid,
     crypto::{decrypt, encrypt, SecretKey},
     recovery::{export, import, RecoveryPayload},
-    store::ObjectStore,
 };
+use arcane_mesh_node::StorageNode;
+use arcane_mesh_testkit::InMemoryMesh;
 use clap::{Parser, Subcommand};
-use std::fs;
+use std::{fs, sync::Arc};
 
 #[derive(Parser)]
 #[command(name = "acmctl", version, about = "Arcane Commons Mesh local MVP")]
@@ -50,21 +51,23 @@ fn verify_mvp() -> Result<()> {
 
     let mut nodes = Vec::new();
     for name in ["node-a", "node-b", "node-c"] {
-        let node = ObjectStore::new(isolated.path().join(name), 1024 * 1024)?;
-        node.put(&object_cid, &blob)?;
-        nodes.push(node);
+        nodes.push(Arc::new(StorageNode::new(
+            name,
+            format!("failure-domain-{name}"),
+            isolated.path().join(name),
+            1024 * 1024,
+        )?));
     }
-    if nodes
-        .iter()
-        .filter(|node| node.get(&object_cid).is_ok())
-        .count()
-        != 3
-    {
+    let mut mesh = InMemoryMesh::new(nodes.clone());
+    let replicated_cid = mesh.replicate(&blob, 3)?;
+    if replicated_cid != object_cid || mesh.audit_all(&object_cid) != 3 {
         bail!("ACM-11 three-replica assertion failed");
     }
 
-    fs::remove_dir_all(isolated.path().join("node-b")).context("ACM-12 failed to stop node B")?;
-    let restored_blob = nodes[0].get(&object_cid)?;
+    nodes[1].set_active(false);
+    let restored_blob = mesh
+        .restore(&object_cid)
+        .context("ACM-12 failed to restore with node B offline")?;
     let restored = decrypt(&key, &serde_json::from_slice(&restored_blob)?, aad)?;
     if restored != plaintext {
         bail!("ACM-12 outage restore hash mismatch");
@@ -76,12 +79,12 @@ fn verify_mvp() -> Result<()> {
         .join(&object_cid[..2])
         .join(format!("{object_cid}.blob"));
     fs::write(node_c_path, b"deliberate corruption")?;
-    if nodes[2].get(&object_cid).is_ok() {
+    if nodes[2].get(&object_cid).is_ok() || mesh.audit_all(&object_cid) != 1 {
         bail!("ACM-13 corrupted replica accepted");
     }
     let fallback = decrypt(
         &key,
-        &serde_json::from_slice(&nodes[0].get(&object_cid)?)?,
+        &serde_json::from_slice(&mesh.restore(&object_cid)?)?,
         aad,
     )?;
     if fallback != plaintext {
