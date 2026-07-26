@@ -20,6 +20,7 @@ acmctl vault create
 acmctl vault add <path>
 acmctl vault list
 acmctl vault restore <file-id> <output>
+acmctl vault delete <file-id>
 acmctl vault verify
 acmctl node init <root>
 acmctl node run <root>
@@ -30,8 +31,11 @@ acmctl demo seed
 acmctl verify-mvp
 ```
 
-Commands that need initialized identity/catalog/control-plane state fail closed or
-report the missing local prerequisite. `node init` requires a new or empty
+Vault commands read the recovery passphrase from standard input, decrypt the local
+Recovery Kit, and operate on encrypted catalog, manifest, and chunk replicas.
+Normal delete writes a 30-day tombstone; encrypted blobs may remain until later GC.
+Commands that need initialized identity/catalog/control-plane state fail closed.
+`node init` requires a new or empty
 dedicated directory. It never scans the home directory or follows an arbitrary
 remote path.
 

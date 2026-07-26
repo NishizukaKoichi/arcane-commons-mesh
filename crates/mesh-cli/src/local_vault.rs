@@ -243,6 +243,34 @@ pub fn restore(file_id: &str, output: &Path, passphrase: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn delete(file_id: &str, passphrase: &str) -> Result<()> {
+    let mut state = load_state()?;
+    let recovered = load_recovery(&state, passphrase)?;
+    let master = SecretKey(recovered.vault_master_key);
+    let owner = Identity::from_seed(recovered.identity_seed);
+    let mut catalog = load_catalog(&state, &master)?.catalog;
+    let timestamp = now()?;
+    let version = catalog
+        .files
+        .iter_mut()
+        .rev()
+        .find(|version| version.file_id == file_id && version.deleted_at.is_none())
+        .context("active file not found")?;
+    version.deleted_at = Some(timestamp);
+    version.retention_until = Some(timestamp + 30 * 86400);
+    catalog.previous_catalog_cid = Some(state.catalog_cid);
+    catalog.catalog_version += 1;
+    catalog.created_at = timestamp;
+    let catalog_blob = serde_json::to_vec(&sign_and_encrypt_catalog(&master, &owner, catalog)?)?;
+    state.catalog_cid = replicate(&catalog_blob, 5)?;
+    state.catalog_version += 1;
+    save_state(&state)?;
+    println!("status=tombstoned");
+    println!("retention_days=30");
+    println!("physical_blobs_may_remain_until_gc=true");
+    Ok(())
+}
+
 pub fn verify(passphrase: &str) -> Result<()> {
     let state = load_state()?;
     let recovered = load_recovery(&state, passphrase)?;

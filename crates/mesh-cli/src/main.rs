@@ -94,6 +94,7 @@ enum VaultCommand {
     Add { path: PathBuf },
     List,
     Restore { file_id: String, output: PathBuf },
+    Delete { file_id: String },
     Verify,
 }
 
@@ -220,6 +221,7 @@ fn vault(command: VaultCommand) -> Result<()> {
         VaultCommand::Restore { file_id, output } => {
             local_vault::restore(&file_id, &output, passphrase.trim_end())
         }
+        VaultCommand::Delete { file_id } => local_vault::delete(&file_id, passphrase.trim_end()),
         VaultCommand::Verify => local_vault::verify(passphrase.trim_end()),
     }
 }
