@@ -14,6 +14,11 @@ tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
 arcane-mesh-core = { path = "../../../crates/mesh-core" }
+rand_core.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 tauri = { version = "2.11.5", features = [] }
 tauri-plugin-stronghold = "2.3.1"
+
+[dev-dependencies]
+tempfile.workspace = true

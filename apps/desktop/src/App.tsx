@@ -21,6 +21,7 @@ import {
   Users,
   Vote
 } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
 import { useMemo, useState } from "react";
 
 type Page = "dashboard" | "vault" | "storage" | "community" | "recovery";
@@ -162,6 +163,23 @@ function Onboarding({
   onComplete: () => void;
 }) {
   const [passphrase, setPassphrase] = useState("");
+  const [exportPath, setExportPath] = useState("");
+  const [error, setError] = useState("");
+  const saveRecovery = async () => {
+    setError("");
+    try {
+      if (isTauri()) {
+        const result = await invoke<{ path: string }>("create_recovery_kit", { passphrase });
+        setExportPath(result.path);
+      } else {
+        setExportPath("ブラウザ表示では書き出しを行いません");
+      }
+      setPassphrase("");
+      onRecoverySaved();
+    } catch (reason) {
+      setError(String(reason));
+    }
+  };
   return (
     <main className="onboarding">
       <section className="onboarding-copy">
@@ -187,7 +205,7 @@ function Onboarding({
         <button
           className={recoverySaved ? "secondary-action complete" : "secondary-action"}
           disabled={passphrase.length < 12 || recoverySaved}
-          onClick={onRecoverySaved}
+          onClick={() => void saveRecovery()}
         >
           {recoverySaved ? <Check size={18} /> : <ArchiveRestore size={18} />}
           {recoverySaved ? "復旧ファイルを保存しました" : "復旧ファイルを保存"}
@@ -196,6 +214,8 @@ function Onboarding({
           保管庫を作成 <ChevronRight size={18} />
         </button>
         {!recoverySaved && <p className="form-note">復旧ファイルを保存すると次へ進めます。</p>}
+        {exportPath && <p className="form-note" role="status">保存先: {exportPath}</p>}
+        {error && <p className="inline-warning" role="alert">{error}</p>}
       </section>
     </main>
   );
@@ -267,6 +287,23 @@ function ProvideStorage({
   onPath: (path: string) => void;
   onEnabled: (enabled: boolean) => void;
 }) {
+  const [error, setError] = useState("");
+  const toggleProvider = async () => {
+    const next = !enabled;
+    setError("");
+    try {
+      if (isTauri()) {
+        await invoke("configure_storage", {
+          root: path,
+          enabled: next,
+          quotaBytes: 10 * 1024 * 1024 * 1024
+        });
+      }
+      onEnabled(next);
+    } catch (reason) {
+      setError(String(reason));
+    }
+  };
   return (
     <section className="content narrow-content">
       <PageTitle eyebrow="共同体へ余白を貸す" title="保存を提供" />
@@ -277,7 +314,7 @@ function ProvideStorage({
           aria-checked={enabled}
           className={enabled ? "switch on" : "switch"}
           disabled={!path}
-          onClick={() => onEnabled(!enabled)}
+          onClick={() => void toggleProvider()}
         ><span /></button>
       </div>
       <div className="settings-list">
@@ -295,6 +332,7 @@ function ProvideStorage({
         </label>
       </div>
       {!path && <div className="inline-warning">専用フォルダを選ぶまで、保存提供は開始できません。</div>}
+      {error && <div className="inline-warning" role="alert">{error}</div>}
       <div className="audit-summary"><ShieldCheck size={21} /><div><strong>直近の確認は成功</strong><span>暗号化された保存データを3時間前に確認しました</span></div></div>
     </section>
   );
@@ -355,4 +393,8 @@ function NodeRow({ name, state, usage, warning = false }: { name: string; state:
 }
 function ConfirmDialog({ fileName, onCancel, onConfirm }: { fileName: string; onCancel: () => void; onConfirm: () => void }) {
   return <div className="dialog-backdrop" role="presentation"><div className="dialog" role="dialog" aria-modal="true" aria-labelledby="delete-title"><div className="danger-symbol"><Trash2 size={22} /></div><h2 id="delete-title">「{fileName}」を削除しますか？</h2><p>30日間は過去の版から復元できます。保存拠点の暗号化データは、その後の整理まで残る場合があります。</p><div className="dialog-actions"><button className="secondary-action compact" onClick={onCancel}>キャンセル</button><button className="danger-action" onClick={onConfirm}>削除する</button></div></div></div>;
+}
+
+function isTauri() {
+  return "__TAURI_INTERNALS__" in window;
 }
