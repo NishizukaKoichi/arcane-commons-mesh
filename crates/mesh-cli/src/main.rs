@@ -251,6 +251,7 @@ fn node(command: NodeCommand) -> Result<()> {
                 DEMO_NODE_QUOTA,
             )?;
             fs::write(canonical.join("node.pid"), std::process::id().to_string())?;
+            service_node_requests(&node, &canonical)?;
             fs::write(canonical.join("ready"), b"ready\n")?;
             println!("node_root={}", canonical.display());
             println!("status=running");
@@ -553,7 +554,7 @@ fn service_node_requests(node: &StorageNode, root: &Path) -> Result<()> {
                 Err(_) => fs::write(responses.join(format!("get-{object_cid}.err")), b"")?,
             }
             fs::remove_file(path)?;
-        } else {
+        } else if !name.starts_with('.') {
             fs::remove_file(path)?;
         }
     }
