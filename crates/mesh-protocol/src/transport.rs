@@ -1,7 +1,8 @@
 use crate::{Request, MAX_FRAME_BYTES, PROTOCOL_ID};
 use arcane_mesh_core::identity::NodeCertificate;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use iroh::{endpoint::presets, Endpoint, EndpointAddr};
-use serde::{Deserialize, Serialize};
+use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use thiserror::Error;
@@ -15,7 +16,31 @@ pub struct WireFrame {
     pub request_signature: Vec<u8>,
     pub node_certificate: NodeCertificate,
     pub node_owner_public_key: [u8; 32],
+    #[serde(
+        serialize_with = "serialize_bytes",
+        deserialize_with = "deserialize_bytes"
+    )]
     pub payload: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WireResponse {
+    pub protocol_version: u16,
+    pub request_id: String,
+    pub ok: bool,
+    pub error_code: Option<String>,
+    #[serde(
+        serialize_with = "serialize_bytes",
+        deserialize_with = "deserialize_bytes"
+    )]
+    pub payload: Vec<u8>,
+    pub payload_cid: String,
+}
+
+pub struct AcceptedRpc {
+    pub frame: WireFrame,
+    send: iroh::endpoint::SendStream,
+    connection: iroh::endpoint::Connection,
 }
 
 #[derive(Debug, Error)]
@@ -91,6 +116,89 @@ impl IrohTransport {
         self.endpoint.addr()
     }
 
+    pub async fn call(
+        &self,
+        peer: EndpointAddr,
+        frame: &WireFrame,
+    ) -> Result<WireResponse, TransportError> {
+        let encoded = serde_json::to_vec(frame)?;
+        if encoded.len() > MAX_FRAME_BYTES {
+            return Err(TransportError::Oversized);
+        }
+        let connection = timeout(
+            CONNECT_TIMEOUT,
+            self.endpoint.connect(peer, PROTOCOL_ID.as_bytes()),
+        )
+        .await
+        .map_err(|_| TransportError::Timeout)?
+        .map_err(|error| TransportError::Iroh(error.to_string()))?;
+        let (mut send, mut receive) = timeout(CONNECT_TIMEOUT, connection.open_bi())
+            .await
+            .map_err(|_| TransportError::Timeout)?
+            .map_err(|error| TransportError::Iroh(error.to_string()))?;
+        timeout(CONNECT_TIMEOUT, send.write_all(&encoded))
+            .await
+            .map_err(|_| TransportError::Timeout)?
+            .map_err(|error| TransportError::Iroh(error.to_string()))?;
+        send.finish()
+            .map_err(|error| TransportError::Iroh(error.to_string()))?;
+        let response_bytes = timeout(CONNECT_TIMEOUT, receive.read_to_end(MAX_FRAME_BYTES))
+            .await
+            .map_err(|_| TransportError::Timeout)?
+            .map_err(|error| TransportError::Iroh(error.to_string()))?;
+        let response: WireResponse = serde_json::from_slice(&response_bytes)?;
+        if response.protocol_version != 1
+            || response.request_id != frame.request.request_id
+            || response.payload_cid != arcane_mesh_core::cid(&response.payload)
+        {
+            return Err(TransportError::Iroh(
+                "response was not bound to the request or payload".into(),
+            ));
+        }
+        connection.close(0_u8.into(), b"rpc complete");
+        Ok(response)
+    }
+
+    pub async fn accept_rpc(
+        &self,
+        expected_community_root: &[u8; 32],
+        now: i64,
+    ) -> Result<AcceptedRpc, TransportError> {
+        let incoming = timeout(CONNECT_TIMEOUT, self.endpoint.accept())
+            .await
+            .map_err(|_| TransportError::Timeout)?
+            .ok_or(TransportError::Closed)?;
+        let accepting = incoming
+            .accept()
+            .map_err(|error| TransportError::Iroh(error.to_string()))?;
+        let connection = timeout(CONNECT_TIMEOUT, accepting)
+            .await
+            .map_err(|_| TransportError::Timeout)?
+            .map_err(|error| TransportError::Iroh(error.to_string()))?;
+        let remote_endpoint_id = connection.remote_id().to_string();
+        let (send, mut receive) = timeout(CONNECT_TIMEOUT, connection.accept_bi())
+            .await
+            .map_err(|_| TransportError::Timeout)?
+            .map_err(|error| TransportError::Iroh(error.to_string()))?;
+        let encoded = timeout(CONNECT_TIMEOUT, receive.read_to_end(MAX_FRAME_BYTES))
+            .await
+            .map_err(|_| TransportError::Timeout)?
+            .map_err(|error| TransportError::Iroh(error.to_string()))?;
+        let frame: WireFrame = serde_json::from_slice(&encoded)?;
+        self.validate_frame(
+            &frame,
+            encoded.len(),
+            &remote_endpoint_id,
+            expected_community_root,
+            now,
+        )?;
+        Ok(AcceptedRpc {
+            frame,
+            send,
+            connection,
+        })
+    }
+
     pub async fn send(&self, peer: EndpointAddr, frame: &WireFrame) -> Result<(), TransportError> {
         let encoded = serde_json::to_vec(frame)?;
         if encoded.len() > MAX_FRAME_BYTES {
@@ -103,20 +211,20 @@ impl IrohTransport {
         .await
         .map_err(|_| TransportError::Timeout)?
         .map_err(|error| TransportError::Iroh(error.to_string()))?;
-        let mut stream = connection
-            .open_uni()
+        let mut stream = timeout(CONNECT_TIMEOUT, connection.open_uni())
             .await
+            .map_err(|_| TransportError::Timeout)?
             .map_err(|error| TransportError::Iroh(error.to_string()))?;
-        stream
-            .write_all(&encoded)
+        timeout(CONNECT_TIMEOUT, stream.write_all(&encoded))
             .await
+            .map_err(|_| TransportError::Timeout)?
             .map_err(|error| TransportError::Iroh(error.to_string()))?;
         stream
             .finish()
             .map_err(|error| TransportError::Iroh(error.to_string()))?;
-        stream
-            .stopped()
+        timeout(CONNECT_TIMEOUT, stream.stopped())
             .await
+            .map_err(|_| TransportError::Timeout)?
             .map_err(|error| TransportError::Iroh(error.to_string()))?;
         Ok(())
     }
@@ -130,27 +238,48 @@ impl IrohTransport {
             .await
             .map_err(|_| TransportError::Timeout)?
             .ok_or(TransportError::Closed)?;
-        let connection = incoming
+        let accepting = incoming
             .accept()
-            .map_err(|error| TransportError::Iroh(error.to_string()))?
+            .map_err(|error| TransportError::Iroh(error.to_string()))?;
+        let connection = timeout(CONNECT_TIMEOUT, accepting)
             .await
+            .map_err(|_| TransportError::Timeout)?
             .map_err(|error| TransportError::Iroh(error.to_string()))?;
         let remote_endpoint_id = connection.remote_id().to_string();
-        let mut stream = connection
-            .accept_uni()
+        let mut stream = timeout(CONNECT_TIMEOUT, connection.accept_uni())
             .await
+            .map_err(|_| TransportError::Timeout)?
             .map_err(|error| TransportError::Iroh(error.to_string()))?;
-        let encoded = stream
-            .read_to_end(MAX_FRAME_BYTES)
+        let encoded = timeout(CONNECT_TIMEOUT, stream.read_to_end(MAX_FRAME_BYTES))
             .await
+            .map_err(|_| TransportError::Timeout)?
             .map_err(|error| TransportError::Iroh(error.to_string()))?;
         let frame: WireFrame = serde_json::from_slice(&encoded)?;
+        self.validate_frame(
+            &frame,
+            encoded.len(),
+            &remote_endpoint_id,
+            expected_community_root,
+            now,
+        )?;
+        connection.close(0_u8.into(), b"frame received");
+        Ok(frame)
+    }
+
+    fn validate_frame(
+        &self,
+        frame: &WireFrame,
+        encoded_len: usize,
+        remote_endpoint_id: &str,
+        expected_community_root: &[u8; 32],
+        now: i64,
+    ) -> Result<(), TransportError> {
         frame
             .node_certificate
             .verify(
                 &frame.node_owner_public_key,
                 &frame.request.community_id,
-                &remote_endpoint_id,
+                remote_endpoint_id,
                 now,
                 crate::REQUEST_TTL_SECONDS,
             )
@@ -170,7 +299,7 @@ impl IrohTransport {
         }
         frame
             .request
-            .validate(expected_community_root, now, encoded.len())
+            .validate(expected_community_root, now, encoded_len)
             .map_err(|error| TransportError::Iroh(error.to_string()))?;
         let payload_cid = arcane_mesh_core::cid(&frame.payload);
         frame
@@ -190,8 +319,7 @@ impl IrohTransport {
         if !self.claim_replay(&replay_key, frame.request.expires_at, now)? {
             return Err(TransportError::Iroh("replayed request identifier".into()));
         }
-        connection.close(0_u8.into(), b"frame received");
-        Ok(frame)
+        Ok(())
     }
 
     pub async fn close(self) {
@@ -244,6 +372,50 @@ impl IrohTransport {
             .map_err(|error| TransportError::Iroh(error.to_string()))?;
         Ok(inserted)
     }
+}
+
+impl AcceptedRpc {
+    pub async fn respond(mut self, response: &WireResponse) -> Result<(), TransportError> {
+        if response.request_id != self.frame.request.request_id
+            || response.payload_cid != arcane_mesh_core::cid(&response.payload)
+        {
+            return Err(TransportError::Iroh(
+                "response was not bound to the accepted request".into(),
+            ));
+        }
+        let encoded = serde_json::to_vec(response)?;
+        if encoded.len() > MAX_FRAME_BYTES {
+            return Err(TransportError::Oversized);
+        }
+        timeout(CONNECT_TIMEOUT, self.send.write_all(&encoded))
+            .await
+            .map_err(|_| TransportError::Timeout)?
+            .map_err(|error| TransportError::Iroh(error.to_string()))?;
+        self.send
+            .finish()
+            .map_err(|error| TransportError::Iroh(error.to_string()))?;
+        timeout(CONNECT_TIMEOUT, self.send.stopped())
+            .await
+            .map_err(|_| TransportError::Timeout)?
+            .map_err(|error| TransportError::Iroh(error.to_string()))?;
+        self.connection.close(0_u8.into(), b"rpc response complete");
+        Ok(())
+    }
+}
+
+fn serialize_bytes<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(&URL_SAFE_NO_PAD.encode(bytes))
+}
+
+fn deserialize_bytes<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let encoded = String::deserialize(deserializer)?;
+    URL_SAFE_NO_PAD.decode(encoded).map_err(D::Error::custom)
 }
 
 #[cfg(test)]
@@ -329,6 +501,92 @@ mod tests {
 
         server.close().await;
         client.close().await;
+    }
+
+    #[tokio::test]
+    async fn round_trips_authenticated_request_response_over_loopback_quic() {
+        let directory = tempfile::tempdir().unwrap();
+        let server = IrohTransport::bind_local(directory.path().join("rpc-server.sqlite3"))
+            .await
+            .unwrap();
+        let client = IrohTransport::bind_local(directory.path().join("rpc-client.sqlite3"))
+            .await
+            .unwrap();
+        let owner = Identity::from_seed([2; 32]);
+        let certificate = NodeCertificateClaims {
+            certificate_version: 1,
+            node_id: "node-a".into(),
+            community_id: "community".into(),
+            owner_member_id: owner.member_id(),
+            endpoint_public_key: client.endpoint.id().to_string(),
+            allowed_roles: vec!["node".into()],
+            max_storage_bytes: 1024,
+            issued_at: 100,
+            expires_at: 200,
+        }
+        .issue(&owner);
+        let request = request();
+        let payload = Vec::new();
+        let frame = WireFrame {
+            request_signature: owner
+                .sign(&request.signing_bytes(&arcane_mesh_core::cid(&payload)))
+                .to_vec(),
+            request,
+            node_certificate: certificate,
+            node_owner_public_key: owner.public_key(),
+            payload,
+        };
+        let server_addr = server.addr();
+        let community_root = Identity::from_seed([1; 32]).public_key();
+        let expected_request_id = frame.request.request_id.clone();
+        let (server_result, client_result) = tokio::join!(
+            async {
+                let accepted = server.accept_rpc(&community_root, 150).await.unwrap();
+                let response_payload = b"encrypted-object-response".to_vec();
+                accepted
+                    .respond(&WireResponse {
+                        protocol_version: 1,
+                        request_id: expected_request_id,
+                        ok: true,
+                        error_code: None,
+                        payload_cid: arcane_mesh_core::cid(&response_payload),
+                        payload: response_payload,
+                    })
+                    .await
+            },
+            client.call(server_addr, &frame)
+        );
+        server_result.unwrap();
+        let response = client_result.unwrap();
+        assert!(response.ok);
+        assert_eq!(response.payload, b"encrypted-object-response");
+
+        server.close().await;
+        client.close().await;
+    }
+
+    #[test]
+    fn maximum_object_payload_fits_the_bounded_json_wire_frame() {
+        let owner = Identity::from_seed([2; 32]);
+        let frame = WireFrame {
+            request: request(),
+            request_signature: vec![0; 64],
+            node_certificate: NodeCertificateClaims {
+                certificate_version: 1,
+                node_id: "node-a".into(),
+                community_id: "community".into(),
+                owner_member_id: owner.member_id(),
+                endpoint_public_key: "endpoint".into(),
+                allowed_roles: vec!["node".into()],
+                max_storage_bytes: crate::MAX_OBJECT_BYTES as u64,
+                issued_at: 100,
+                expires_at: 200,
+            }
+            .issue(&owner),
+            node_owner_public_key: owner.public_key(),
+            payload: vec![255; crate::MAX_OBJECT_BYTES],
+        };
+        assert!(serde_json::to_vec(&frame).unwrap().len() <= MAX_FRAME_BYTES);
     }
 
     #[tokio::test]

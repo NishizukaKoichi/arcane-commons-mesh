@@ -1,5 +1,5 @@
-import { generateKeyPairSync, sign } from "node:crypto";
-import { writeFile } from "node:fs/promises";
+import { createPrivateKey, createPublicKey, sign } from "node:crypto";
+import { readFile, writeFile } from "node:fs/promises";
 import { blake3 } from "@noble/hashes/blake3.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 
@@ -14,6 +14,16 @@ function base64Url(bytes) {
 function rawPublicKey(key) {
   const der = key.export({ type: "spki", format: "der" });
   return base64Url(der.subarray(der.length - 32));
+}
+
+function deterministicKeyPair(seedByte) {
+  const pkcs8Prefix = Buffer.from("302e020100300506032b657004220420", "hex");
+  const privateKey = createPrivateKey({
+    key: Buffer.concat([pkcs8Prefix, Buffer.alloc(32, seedByte)]),
+    format: "der",
+    type: "pkcs8"
+  });
+  return { privateKey, publicKey: createPublicKey(privateKey) };
 }
 
 function concat(parts) {
@@ -77,9 +87,9 @@ async function request(path, init = {}) {
   return body;
 }
 
-const root = generateKeyPairSync("ed25519");
-const alice = generateKeyPairSync("ed25519");
-const bob = generateKeyPairSync("ed25519");
+const root = deterministicKeyPair(1);
+const alice = deterministicKeyPair(11);
+const bob = deterministicKeyPair(12);
 const rootPublicKey = rawPublicKey(root.publicKey);
 const alicePublicKey = rawPublicKey(alice.publicKey);
 const bobPublicKey = rawPublicKey(bob.publicKey);
@@ -89,7 +99,7 @@ const aliceMemberId = `mem_${bytesToHex(
 const bobMemberId = `mem_${bytesToHex(
   blake3(Buffer.from(bobPublicKey, "base64url"))
 )}`;
-const founderRoles = ["admin", "member"];
+const founderRoles = ["admin", "auditor", "member", "node"];
 const founderCredentialSerial = Date.now();
 const founderCredentialExpiresAt = createdAt + 86400;
 const bootstrapMessage = [
@@ -208,8 +218,10 @@ for (const [index, nodeId] of [
   "storage-c",
   "auditor"
 ].entries()) {
-  const endpoint = generateKeyPairSync("ed25519");
-  const endpointPublicKey = rawPublicKey(endpoint.publicKey);
+  const endpointDocument = JSON.parse(
+    await readFile(`.demo/nodes/${nodeId}/network-endpoint.json`, "utf8")
+  );
+  const endpointPublicKey = endpointDocument.endpoint_addr.id;
   const certificateMessage = nodeCertificateBytes({
     nodeId,
     communityId,
@@ -246,6 +258,7 @@ await writeFile(
       communityId,
       members: ["Alice", "Bob"],
       nodes: ["storage-a", "storage-b", "storage-c", "auditor"],
+      transport: "iroh-quic-loopback-authenticated",
       privateKeysPersisted: false
     },
     null,

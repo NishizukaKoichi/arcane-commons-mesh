@@ -5,7 +5,7 @@ copy of valuable data.
 
 | Threat | Required control | Current status |
 |---|---|---|
-| Malicious storage node / modified chunk | CID before decrypt, AEAD, plaintext hash, fallback | implemented and tested locally |
+| Malicious storage node / modified chunk | CID before decrypt, AEAD, plaintext hash, fallback | implemented and tested through separate QUIC node processes |
 | Compromised control plane | client keys, signed records, linked checkpoints | keys excluded; membership, node, vote, and catalog records signed |
 | Stolen device | Stronghold, encrypted Recovery Kit, account lock | Stronghold and Recovery Kit implemented; OS-session compromise remains |
 | Replay attacker | one-use challenges, request nonce/expiry, certificate binding | D1 and every public iroh transport constructor require persistent replay state |
@@ -34,6 +34,9 @@ memory for the active app session; a renderer compromise can therefore steal it.
 
 Parsers reject unknown versions, excessive KDF parameters, oversized objects,
 trailing recovery bytes, malformed encodings, symlink storage roots, and invalid
-CIDs. The local process demo does not prove NAT traversal, relay availability,
+CIDs. QUIC requests bind the membership credential and node certificate to the
+client endpoint, request ID, operation, object CID, payload CID, and expiry.
+Responses are bound to the request ID and payload CID over the authenticated
+endpoint connection. The local process demo does not prove NAT traversal, relay availability,
 geographic diversity, resistance to coordinated operators, or production
 availability.

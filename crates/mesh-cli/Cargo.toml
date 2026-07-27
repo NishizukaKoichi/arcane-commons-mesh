@@ -14,6 +14,7 @@ anyhow.workspace = true
 arcane-mesh-core = { path = "../mesh-core" }
 arcane-mesh-control = { path = "../mesh-control" }
 arcane-mesh-node = { path = "../mesh-node" }
+arcane-mesh-protocol = { path = "../mesh-protocol" }
 arcane-mesh-testkit = { path = "../mesh-testkit" }
 blake3.workspace = true
 clap.workspace = true
@@ -21,4 +22,5 @@ rand_core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
+tokio.workspace = true
 zeroize.workspace = true

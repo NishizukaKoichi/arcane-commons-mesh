@@ -141,7 +141,7 @@ components:
         policyVersion: { type: integer, minimum: 1 }
         founderMemberId: { type: string, pattern: "^mem_[0-9a-f]{64}$" }
         founderPublicKey: { type: string, minLength: 43, maxLength: 43 }
-        founderRoles: { type: array, items: { type: string, enum: [member, admin, auditor] } }
+        founderRoles: { type: array, items: { type: string, enum: [member, admin, auditor, node] } }
         founderCredentialSerial: { type: integer, minimum: 0 }
         founderCredentialExpiresAt: { type: integer }
         founderCredentialSignature: { type: string }
@@ -153,7 +153,7 @@ components:
       properties:
         memberId: { type: string, pattern: "^mem_[0-9a-f]{64}$" }
         memberPublicKey: { type: string, minLength: 43, maxLength: 43 }
-        roles: { type: array, items: { type: string, enum: [member, admin, auditor] } }
+        roles: { type: array, items: { type: string, enum: [member, admin, auditor, node] } }
         serial: { type: integer, minimum: 0 }
         issuedAt: { type: integer }
         expiresAt: { type: integer }
@@ -166,7 +166,7 @@ components:
         nodeId: { type: string }
         communityId: { type: string }
         ownerMemberId: { type: string }
-        endpointPublicKey: { type: string }
+        endpointPublicKey: { type: string, pattern: '^(?:[A-Za-z0-9_-]{43}|[0-9a-f]{64})$' }
         failureDomain: { type: string }
         region: { type: string }
         maxStorageBytes: { type: integer, minimum: 1 }

@@ -6,10 +6,14 @@ mod verify;
 use anyhow::{bail, Context, Result};
 use arcane_mesh_control::LocalControlPlane;
 use arcane_mesh_core::{
-    identity::Identity,
+    identity::{Identity, MembershipClaims, NodeCertificateClaims},
     recovery::{export, import, RecoveryPayload},
 };
 use arcane_mesh_node::StorageNode;
+use arcane_mesh_protocol::{
+    transport::{IrohTransport, TransportError, WireResponse},
+    LocalNodeEndpoint, LocalNodeNetworkConfig, Operation,
+};
 use clap::{Parser, Subcommand};
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -147,6 +151,7 @@ enum DemoCommand {
     Up,
     Down,
     Seed,
+    Smoke,
 }
 
 fn main() -> Result<()> {
@@ -296,6 +301,13 @@ fn node(command: NodeCommand) -> Result<()> {
                 DEMO_NODE_QUOTA,
             )?;
             fs::write(canonical.join("node.pid"), std::process::id().to_string())?;
+            let network_config = canonical.join("network-config.json");
+            if network_config.exists() {
+                let config: LocalNodeNetworkConfig =
+                    serde_json::from_slice(&fs::read(network_config)?)?;
+                let runtime = tokio::runtime::Runtime::new()?;
+                return runtime.block_on(service_network_requests(&node, &canonical, &config));
+            }
             service_node_requests(&node, &canonical)?;
             fs::write(canonical.join("ready"), b"ready\n")?;
             println!("node_root={}", canonical.display());
@@ -322,6 +334,87 @@ fn node(command: NodeCommand) -> Result<()> {
     }
 }
 
+async fn service_network_requests(
+    node: &StorageNode,
+    root: &Path,
+    config: &LocalNodeNetworkConfig,
+) -> Result<()> {
+    let transport = IrohTransport::bind_local(root.join("network-replay.sqlite3")).await?;
+    let endpoint = LocalNodeEndpoint {
+        endpoint_addr: transport.addr(),
+    };
+    fs::write(
+        root.join("network-endpoint.json"),
+        serde_json::to_vec_pretty(&endpoint)?,
+    )?;
+    fs::write(root.join("ready"), b"network-ready\n")?;
+    println!("node_root={}", root.display());
+    println!("transport=iroh-quic-loopback");
+    println!("status=running");
+    loop {
+        fs::write(root.join("heartbeat"), unix_timestamp()?.to_string())?;
+        let accepted = match transport
+            .accept_rpc(
+                &config.community_root_public_key,
+                unix_timestamp()?.try_into()?,
+            )
+            .await
+        {
+            Ok(accepted) => accepted,
+            Err(TransportError::Timeout) => continue,
+            Err(error) => return Err(error.into()),
+        };
+        let request_id = accepted.frame.request.request_id.clone();
+        let object_cid = accepted.frame.request.object_cid.clone();
+        let operation = accepted.frame.request.operation;
+        let request_payload = accepted.frame.payload.clone();
+        let (ok, error_code, payload) = match operation {
+            Operation::PutObject | Operation::ReplicateObject => {
+                let matches_cid = object_cid
+                    .as_deref()
+                    .is_some_and(|expected| arcane_mesh_core::cid(&request_payload) == expected);
+                if matches_cid
+                    && node
+                        .put(object_cid.as_deref().unwrap_or_default(), &request_payload)
+                        .is_ok()
+                {
+                    (true, None, Vec::new())
+                } else {
+                    (false, Some("storage_rejected".into()), Vec::new())
+                }
+            }
+            Operation::GetObject => {
+                match object_cid.as_deref().and_then(|cid| node.get(cid).ok()) {
+                    Some(bytes) => (true, None, bytes),
+                    None => (false, Some("not_found".into()), Vec::new()),
+                }
+            }
+            Operation::HasObject | Operation::AuditObject => {
+                let healthy = object_cid
+                    .as_deref()
+                    .is_some_and(|cid| node.audit(cid).unwrap_or(false));
+                (true, None, healthy.to_string().into_bytes())
+            }
+            Operation::DeleteAfter => {
+                let deleted = object_cid
+                    .as_deref()
+                    .is_some_and(|cid| node.delete(cid).unwrap_or(false));
+                (deleted, (!deleted).then(|| "not_found".into()), Vec::new())
+            }
+            Operation::Hello | Operation::Ping => (true, None, Vec::new()),
+        };
+        let response = WireResponse {
+            protocol_version: 1,
+            request_id,
+            ok,
+            error_code,
+            payload_cid: arcane_mesh_core::cid(&payload),
+            payload,
+        };
+        accepted.respond(&response).await?;
+    }
+}
+
 fn demo(command: DemoCommand) -> Result<()> {
     match command {
         DemoCommand::Up => {
@@ -344,6 +437,12 @@ fn demo(command: DemoCommand) -> Result<()> {
             for name in ["storage-a", "storage-b", "storage-c", "auditor"] {
                 let root = demo_root.join("nodes").join(name);
                 fs::create_dir_all(&root)?;
+                fs::write(
+                    root.join("network-config.json"),
+                    serde_json::to_vec_pretty(&LocalNodeNetworkConfig {
+                        community_root_public_key: Identity::from_seed([1; 32]).public_key(),
+                    })?,
+                )?;
                 let log = OpenOptions::new()
                     .create(true)
                     .append(true)
@@ -356,13 +455,14 @@ fn demo(command: DemoCommand) -> Result<()> {
                     log,
                 )?);
             }
+            fs::write(&record_path, serde_json::to_vec_pretty(&records)?)?;
             wait_for_demo_nodes(&demo_root)?;
             wait_for_worker()?;
             seed_demo_control_plane()?;
-            fs::write(&record_path, serde_json::to_vec_pretty(&records)?)?;
             println!("demo_root={}", fs::canonicalize(&demo_root)?.display());
             println!("storage_nodes=3");
             println!("auditor_nodes=1");
+            println!("transport=iroh-quic-loopback-authenticated");
             println!("control_plane=http://127.0.0.1:8787");
             println!("status=running");
             Ok(())
@@ -388,6 +488,147 @@ fn demo(command: DemoCommand) -> Result<()> {
             println!("local demo seed prepared");
             Ok(())
         }
+        DemoCommand::Smoke => demo_network_smoke(),
+    }
+}
+
+fn demo_network_smoke() -> Result<()> {
+    let demo_root = Path::new(".demo");
+    let bootstrap: serde_json::Value =
+        serde_json::from_slice(&fs::read(demo_root.join("bootstrap.json"))?)?;
+    let community_id = bootstrap
+        .get("communityId")
+        .and_then(serde_json::Value::as_str)
+        .context("demo bootstrap has no community ID")?;
+    let endpoints = ["storage-a", "storage-b", "storage-c"]
+        .into_iter()
+        .map(|name| {
+            Ok(serde_json::from_slice::<LocalNodeEndpoint>(&fs::read(
+                demo_root
+                    .join("nodes")
+                    .join(name)
+                    .join("network-endpoint.json"),
+            )?)?)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let runtime = tokio::runtime::Runtime::new()?;
+    let transport = runtime.block_on(IrohTransport::bind_local(
+        demo_root.join("smoke-client-replay.sqlite3"),
+    ))?;
+    let community_root = Identity::from_seed([1; 32]);
+    let client = Identity::from_seed([11; 32]);
+    let now: i64 = unix_timestamp()?.try_into()?;
+    let credential = MembershipClaims {
+        credential_version: 1,
+        community_id: community_id.into(),
+        member_public_key: client.public_key(),
+        member_id: client.member_id(),
+        roles: vec![
+            "admin".into(),
+            "auditor".into(),
+            "member".into(),
+            "node".into(),
+        ],
+        issued_at: now - 60,
+        expires_at: now + 3600,
+        serial: 100,
+        issuer_public_key: community_root.public_key(),
+    }
+    .issue(&community_root);
+    let certificate = NodeCertificateClaims {
+        certificate_version: 1,
+        node_id: "demo-smoke-client".into(),
+        community_id: community_id.into(),
+        owner_member_id: client.member_id(),
+        endpoint_public_key: transport.addr().id.to_string(),
+        allowed_roles: vec!["node".into()],
+        max_storage_bytes: DEMO_NODE_QUOTA,
+        issued_at: now - 60,
+        expires_at: now + 3600,
+    }
+    .issue(&client);
+    let mut payload = vec![0_u8; 4096];
+    OsRng.fill_bytes(&mut payload);
+    let object_cid = arcane_mesh_core::cid(&payload);
+    let mut sequence = 0_u64;
+    for endpoint in &endpoints {
+        sequence += 1;
+        let frame = signed_demo_frame(
+            community_id,
+            &client,
+            &credential,
+            &certificate,
+            Operation::PutObject,
+            Some(&object_cid),
+            payload.clone(),
+            now,
+            sequence,
+        );
+        let response = runtime.block_on(transport.call(endpoint.endpoint_addr.clone(), &frame))?;
+        if !response.ok {
+            bail!("demo QUIC PUT failed");
+        }
+    }
+    for endpoint in &endpoints {
+        sequence += 1;
+        let frame = signed_demo_frame(
+            community_id,
+            &client,
+            &credential,
+            &certificate,
+            Operation::GetObject,
+            Some(&object_cid),
+            Vec::new(),
+            now,
+            sequence,
+        );
+        let response = runtime.block_on(transport.call(endpoint.endpoint_addr.clone(), &frame))?;
+        if !response.ok
+            || response.payload != payload
+            || arcane_mesh_core::cid(&response.payload) != object_cid
+        {
+            bail!("demo QUIC GET verification failed");
+        }
+    }
+    println!("transport=iroh-quic-loopback-authenticated");
+    println!("replicas=3/3");
+    println!("round_trip=pass");
+    println!("plaintext_sent=false");
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn signed_demo_frame(
+    community_id: &str,
+    identity: &Identity,
+    credential: &arcane_mesh_core::identity::MembershipCredential,
+    certificate: &arcane_mesh_core::identity::NodeCertificate,
+    operation: Operation,
+    object_cid: Option<&str>,
+    payload: Vec<u8>,
+    now: i64,
+    sequence: u64,
+) -> arcane_mesh_protocol::transport::WireFrame {
+    let request = arcane_mesh_protocol::Request {
+        protocol_version: 1,
+        request_id: format!("demo-network-request-{sequence:016x}"),
+        community_id: community_id.into(),
+        node_id: "demo-smoke-client".into(),
+        operation,
+        object_cid: object_cid.map(str::to_owned),
+        issued_at: now,
+        expires_at: now + 300,
+        credential: credential.clone(),
+    };
+    let request_signature = identity
+        .sign(&request.signing_bytes(&arcane_mesh_core::cid(&payload)))
+        .to_vec();
+    arcane_mesh_protocol::transport::WireFrame {
+        request,
+        request_signature,
+        node_certificate: certificate.clone(),
+        node_owner_public_key: identity.public_key(),
+        payload,
     }
 }
 

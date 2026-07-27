@@ -2,6 +2,7 @@ import { generateKeyPairSync, sign, type KeyObject } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app";
 import { auditMerkleRoot } from "../src/maintenance";
+import { community, node } from "../src/schemas";
 import {
   fromBase64Url,
   hashOpaque,
@@ -51,6 +52,39 @@ async function login(
 }
 
 describe("control plane API", () => {
+  it("accepts iroh endpoint IDs and the node membership role", () => {
+    expect(
+      node.parse({
+        nodeId: "node-a",
+        communityId: "community-a",
+        ownerMemberId: "member-a",
+        endpointPublicKey: "a".repeat(64),
+        failureDomain: "mac-local-a",
+        region: "loopback",
+        maxStorageBytes: 1024,
+        certificateSignature: "a".repeat(86),
+        issuedAt: 100,
+        expiresAt: 200
+      }).endpointPublicKey
+    ).toHaveLength(64);
+    expect(
+      community.parse({
+        communityId: "community-a",
+        name: "Local mesh",
+        rootPublicKey: "a".repeat(43),
+        createdAt: 100,
+        policyVersion: 1,
+        founderMemberId: "member-a",
+        founderPublicKey: "b".repeat(43),
+        founderRoles: ["member", "admin", "node"],
+        founderCredentialSerial: 1,
+        founderCredentialExpiresAt: 200,
+        founderCredentialSignature: "a".repeat(86),
+        rootSignature: "b".repeat(86)
+      }).founderRoles
+    ).toContain("node");
+  });
+
   it("builds deterministic BLAKE3 Merkle roots including the empty day", () => {
     expect(auditMerkleRoot([])).toHaveLength(64);
     expect(auditMerkleRoot(["a".repeat(64), "b".repeat(64), "c".repeat(64)])).toBe(

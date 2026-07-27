@@ -28,6 +28,7 @@ acmctl node init <root>
 acmctl node run <root>
 acmctl node status <root>
 acmctl demo up
+acmctl demo smoke
 acmctl demo down
 acmctl demo seed
 acmctl verify-mvp
@@ -46,7 +47,12 @@ Commands that need initialized identity/catalog/control-plane state fail closed.
 dedicated directory. It never scans the home directory or follows an arbitrary
 remote path.
 
+`demo smoke` performs a three-node authenticated QUIC write/read/CID round trip
+against the running local demo.
+
 `verify-mvp` uses an isolated temporary owner, real storage-node child processes
-for data and recovery metadata, six in-memory failure domains for model checks, a
-clean recovery root, and an offline transport. It writes a machine-readable summary to
+with separate iroh loopback endpoints for data and recovery metadata, six
+in-memory failure domains for model checks, and a clean recovery root. Storage,
+outage fallback, corruption rejection, repair, and clean recovery traverse the
+QUIC RPC path. It writes a machine-readable summary to
 `.verify/verify-mvp-report.json`, which is ignored by Git.

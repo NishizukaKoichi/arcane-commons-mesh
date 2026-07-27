@@ -2,6 +2,9 @@ import { z } from "zod";
 
 export const cid = z.string().regex(/^[0-9a-f]{64}$/);
 export const publicKey = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
+export const endpointPublicKey = z
+  .string()
+  .regex(/^(?:[A-Za-z0-9_-]{43}|[0-9a-f]{64})$/);
 export const opaqueId = z.string().min(3).max(128);
 
 export const challengeSession = z.object({
@@ -21,7 +24,7 @@ export const community = z.object({
   policyVersion: z.number().int().positive(),
   founderMemberId: opaqueId,
   founderPublicKey: publicKey,
-  founderRoles: z.array(z.enum(["member", "admin", "auditor"])).min(1).max(3),
+  founderRoles: z.array(z.enum(["member", "admin", "auditor", "node"])).min(1).max(4),
   founderCredentialSerial: z.number().int().nonnegative(),
   founderCredentialExpiresAt: z.number().int(),
   founderCredentialSignature: z.string().min(80).max(128),
@@ -32,7 +35,7 @@ export const node = z.object({
   nodeId: opaqueId,
   communityId: opaqueId,
   ownerMemberId: opaqueId,
-  endpointPublicKey: publicKey,
+  endpointPublicKey,
   failureDomain: z.string().min(1).max(128),
   region: z.string().min(1).max(64),
   maxStorageBytes: z.number().int().positive(),
@@ -49,7 +52,7 @@ export const joinRequest = z.object({
 export const membershipApproval = z.object({
   memberId: opaqueId,
   memberPublicKey: publicKey,
-  roles: z.array(z.enum(["member", "admin", "auditor"])).min(1).max(3),
+  roles: z.array(z.enum(["member", "admin", "auditor", "node"])).min(1).max(4),
   serial: z.number().int().nonnegative(),
   issuedAt: z.number().int(),
   expiresAt: z.number().int(),

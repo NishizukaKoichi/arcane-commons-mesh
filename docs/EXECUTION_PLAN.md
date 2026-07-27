@@ -14,7 +14,8 @@
 
 1. Rust `mesh-core` is the only domain implementation. CLI and Tauri use it.
 2. Coordinator, transport, secret store, clock, and audit anchor are adapters.
-3. CI acceptance uses an in-memory transport; iroh is a separate local integration.
+3. Model-level failure-domain checks use the in-memory transport; process-level
+   acceptance uses authenticated iroh/QUIC endpoints.
 4. The critical path is encrypt → three placements → outage restore → corrupt
    replica fallback → clean recovery.
 5. Canonical signed bytes, rollback protection, deletion authority, and key
@@ -112,3 +113,8 @@ also require static review, documentation, or local process history.
   for import, GC, and retained restoration. All acceptance, build, test, audit,
   demo, and unsigned Tauri gates passed; security, data-loss, and
   privacy/quality re-reviews reported no remaining CRITICAL/HIGH findings.
+- 2026-07-28: replaced process-node filesystem IPC in the acceptance path with
+  authenticated bidirectional iroh/QUIC RPC. The one-Mac demo now registers
+  actual endpoint IDs, exposes a three-replica network smoke command, and runs
+  outage, corruption, repair, and clean recovery through separate loopback
+  node endpoints.

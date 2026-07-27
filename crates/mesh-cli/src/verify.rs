@@ -11,11 +11,17 @@ use arcane_mesh_core::{
     cid,
     credit::{CreditEntry, CreditLedger, CreditReason},
     crypto::{decrypt, SecretKey},
-    identity::{Identity, MembershipClaims},
+    identity::{
+        Identity, MembershipClaims, MembershipCredential, NodeCertificate, NodeCertificateClaims,
+    },
     recovery::{export, import, RecoveryPayload, RecoveryVaultPointer},
     vault::{decrypt_stream, encrypt_stream},
 };
 use arcane_mesh_node::StorageNode;
+use arcane_mesh_protocol::{
+    transport::{IrohTransport, WireFrame, WireResponse},
+    LocalNodeEndpoint, LocalNodeNetworkConfig, Operation, Request,
+};
 use arcane_mesh_testkit::InMemoryMesh;
 use serde::Serialize;
 use std::{
@@ -23,7 +29,10 @@ use std::{
     io::Cursor,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
     thread,
     time::Duration,
 };
@@ -147,7 +156,7 @@ pub fn verify_mvp() -> Result<()> {
     process_nodes.assert_running()?;
     pass(
         3,
-        "ciphertext replicated through IPC to three live storage-node processes",
+        "ciphertext replicated through authenticated QUIC to three storage-node processes",
     );
 
     fs::remove_file(&fixture_path)?;
@@ -440,7 +449,7 @@ pub fn verify_mvp() -> Result<()> {
     let report = VerificationReport {
         format_version: 1,
         seed: "acm-v0.1-fixed-fixture-2026-07-26",
-        transport: "in-memory-offline",
+        transport: "iroh-quic-loopback-authenticated",
         external_network_required: false,
         steps: (1..=15)
             .zip([
@@ -561,6 +570,13 @@ fn write_report(report: &VerificationReport) -> Result<()> {
 struct ProcessNodes {
     children: Vec<Option<Child>>,
     roots: Vec<PathBuf>,
+    endpoints: Vec<LocalNodeEndpoint>,
+    runtime: tokio::runtime::Runtime,
+    transport: IrohTransport,
+    identity: Identity,
+    credential: MembershipCredential,
+    certificate: NodeCertificate,
+    sequence: AtomicU64,
 }
 
 const PROCESS_NODE_NAMES: [&str; 7] = [
@@ -576,12 +592,54 @@ const PROCESS_NODE_NAMES: [&str; 7] = [
 impl ProcessNodes {
     fn start(root: PathBuf) -> Result<Self> {
         fs::create_dir_all(&root)?;
+        let runtime = tokio::runtime::Runtime::new()?;
+        let transport = runtime.block_on(IrohTransport::bind_local(
+            root.join("client-replay.sqlite3"),
+        ))?;
+        let community_root = Identity::from_seed([1; 32]);
+        let identity = Identity::from_seed([11; 32]);
+        let now = network_now()?;
+        let credential = MembershipClaims {
+            credential_version: 1,
+            community_id: "local-community".into(),
+            member_public_key: identity.public_key(),
+            member_id: identity.member_id(),
+            roles: vec![
+                "member".into(),
+                "node".into(),
+                "auditor".into(),
+                "admin".into(),
+            ],
+            issued_at: now - 60,
+            expires_at: now + 3600,
+            serial: 99,
+            issuer_public_key: community_root.public_key(),
+        }
+        .issue(&community_root);
+        let certificate = NodeCertificateClaims {
+            certificate_version: 1,
+            node_id: "verification-client".into(),
+            community_id: "local-community".into(),
+            owner_member_id: identity.member_id(),
+            endpoint_public_key: transport.addr().id.to_string(),
+            allowed_roles: vec!["node".into()],
+            max_storage_bytes: 64 * 1024 * 1024,
+            issued_at: now - 60,
+            expires_at: now + 3600,
+        }
+        .issue(&identity);
         let executable = std::env::current_exe()?;
         let mut children = Vec::new();
         let mut roots = Vec::new();
         for name in PROCESS_NODE_NAMES {
             let node_root = root.join(name);
             fs::create_dir_all(&node_root)?;
+            fs::write(
+                node_root.join("network-config.json"),
+                serde_json::to_vec_pretty(&LocalNodeNetworkConfig {
+                    community_root_public_key: community_root.public_key(),
+                })?,
+            )?;
             roots.push(node_root.clone());
             children.push(Some(
                 Command::new(&executable)
@@ -595,11 +653,28 @@ impl ProcessNodes {
             ));
         }
         for _ in 0..50 {
-            if PROCESS_NODE_NAMES
-                .iter()
-                .all(|name| root.join(name).join("ready").exists())
-            {
-                return Ok(Self { children, roots });
+            if PROCESS_NODE_NAMES.iter().all(|name| {
+                root.join(name).join("ready").exists()
+                    && root.join(name).join("network-endpoint.json").exists()
+            }) {
+                let endpoints = roots
+                    .iter()
+                    .map(|node_root| {
+                        serde_json::from_slice(&fs::read(node_root.join("network-endpoint.json"))?)
+                            .map_err(Into::into)
+                    })
+                    .collect::<Result<Vec<LocalNodeEndpoint>>>()?;
+                return Ok(Self {
+                    children,
+                    roots,
+                    endpoints,
+                    runtime,
+                    transport,
+                    identity,
+                    credential,
+                    certificate,
+                    sequence: AtomicU64::new(1),
+                });
             }
             thread::sleep(Duration::from_millis(100));
         }
@@ -630,19 +705,8 @@ impl ProcessNodes {
     }
 
     fn put(&self, index: usize, object_cid: &str, bytes: &[u8]) -> Result<()> {
-        let request_root = self.roots[index].join("ipc").join("requests");
-        let response_root = self.roots[index].join("ipc").join("responses");
-        fs::create_dir_all(&request_root)?;
-        fs::create_dir_all(&response_root)?;
-        let response = response_root.join(format!("put-{object_cid}.ok"));
-        let error = response_root.join(format!("put-{object_cid}.err"));
-        let temporary = request_root.join(format!(".put-{object_cid}.partial"));
-        let request = request_root.join(format!("put-{object_cid}.blob"));
-        fs::write(&temporary, bytes)?;
-        fs::rename(temporary, request)?;
-        wait_for_path(&response, &error)?;
-        fs::remove_file(response)?;
-        Ok(())
+        let response = self.call(index, Operation::PutObject, Some(object_cid), bytes)?;
+        ensure_ok(response, "network PUT")
     }
 
     fn restore(&self, object_cid: &str) -> Result<Vec<u8>> {
@@ -650,93 +714,82 @@ impl ProcessNodes {
             if child.is_none() {
                 continue;
             }
-            let request_root = self.roots[index].join("ipc").join("requests");
-            let response_root = self.roots[index].join("ipc").join("responses");
-            fs::create_dir_all(&request_root)?;
-            fs::create_dir_all(&response_root)?;
-            let response = response_root.join(format!("get-{object_cid}.blob"));
-            let error = response_root.join(format!("get-{object_cid}.err"));
-            fs::write(request_root.join(format!("get-{object_cid}.req")), b"")?;
-            if wait_for_path(&response, &error).is_ok() && response.exists() {
-                let bytes = fs::read(&response)?;
-                fs::remove_file(response)?;
-                if cid(&bytes) == object_cid {
-                    return Ok(bytes);
+            if let Ok(response) = self.call(index, Operation::GetObject, Some(object_cid), &[]) {
+                if response.ok && cid(&response.payload) == object_cid {
+                    return Ok(response.payload);
                 }
             }
-            if error.exists() {
-                fs::remove_file(error)?;
-            }
         }
-        bail!("no healthy process-node replica")
+        bail!("no healthy QUIC process-node replica")
     }
 
     fn get(&self, index: usize, object_cid: &str) -> Result<Vec<u8>> {
-        let request_root = self.roots[index].join("ipc").join("requests");
-        let response_root = self.roots[index].join("ipc").join("responses");
-        fs::create_dir_all(&request_root)?;
-        fs::create_dir_all(&response_root)?;
-        let response = response_root.join(format!("get-{object_cid}.blob"));
-        let error = response_root.join(format!("get-{object_cid}.err"));
-        fs::write(request_root.join(format!("get-{object_cid}.req")), b"")?;
-        wait_for_path(&response, &error)?;
-        let bytes = fs::read(&response)?;
-        fs::remove_file(response)?;
-        if cid(&bytes) != object_cid {
-            bail!("process-node GET returned CID mismatch");
+        let response = self.call(index, Operation::GetObject, Some(object_cid), &[])?;
+        if !response.ok || cid(&response.payload) != object_cid {
+            bail!("QUIC process-node GET returned an unhealthy object");
         }
-        Ok(bytes)
+        Ok(response.payload)
     }
 
     fn repair(&self, destination: usize, object_cid: &str, sources: &[usize]) -> Result<()> {
-        #[derive(serde::Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct RepairTask<'a> {
-            task_id: String,
-            object_cid: &'a str,
-            challenge: String,
-            source_roots: Vec<PathBuf>,
+        for source in sources {
+            if self.children[*source].is_none() {
+                continue;
+            }
+            let Ok(bytes) = self.get(*source, object_cid) else {
+                continue;
+            };
+            let response = self.call(
+                destination,
+                Operation::ReplicateObject,
+                Some(object_cid),
+                &bytes,
+            )?;
+            ensure_ok(response, "network repair")?;
+            return Ok(());
         }
-        #[derive(serde::Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct RepairReceipt {
-            task_id: String,
-            object_cid: String,
-            challenge: String,
-            source_node: String,
-        }
-        let request_root = self.roots[destination].join("ipc").join("requests");
-        let response_root = self.roots[destination].join("ipc").join("responses");
-        fs::create_dir_all(&request_root)?;
-        fs::create_dir_all(&response_root)?;
-        let task_id = format!("repair-process-{object_cid}-{destination}");
-        let challenge = format!("challenge-process-{object_cid}");
-        let task = RepairTask {
-            task_id: task_id.clone(),
-            object_cid,
-            challenge: challenge.clone(),
-            source_roots: sources
-                .iter()
-                .map(|index| self.roots[*index].clone())
-                .collect(),
+        bail!("no healthy QUIC repair source")
+    }
+
+    fn call(
+        &self,
+        index: usize,
+        operation: Operation,
+        object_cid: Option<&str>,
+        payload: &[u8],
+    ) -> Result<WireResponse> {
+        let now = network_now()?;
+        let request_id = format!(
+            "verify-network-request-{:016x}",
+            self.sequence.fetch_add(1, Ordering::SeqCst)
+        );
+        let request = Request {
+            protocol_version: 1,
+            request_id,
+            community_id: "local-community".into(),
+            node_id: "verification-client".into(),
+            operation,
+            object_cid: object_cid.map(str::to_owned),
+            issued_at: now,
+            expires_at: now + 300,
+            credential: self.credential.clone(),
         };
-        let response = response_root.join(format!("repair-{object_cid}.json"));
-        let error = response_root.join(format!("repair-{object_cid}.err"));
-        fs::write(
-            request_root.join(format!("repair-{object_cid}.json")),
-            serde_json::to_vec(&task)?,
-        )?;
-        wait_for_path(&response, &error)?;
-        let receipt: RepairReceipt = serde_json::from_slice(&fs::read(&response)?)?;
-        fs::remove_file(response)?;
-        if receipt.task_id != task_id
-            || receipt.object_cid != object_cid
-            || receipt.challenge != challenge
-            || receipt.source_node.is_empty()
-        {
-            bail!("process-node repair receipt was not bound to its task");
-        }
-        Ok(())
+        let payload = payload.to_vec();
+        let request_signature = self
+            .identity
+            .sign(&request.signing_bytes(&cid(&payload)))
+            .to_vec();
+        let frame = WireFrame {
+            request,
+            request_signature,
+            node_certificate: self.certificate.clone(),
+            node_owner_public_key: self.identity.public_key(),
+            payload,
+        };
+        Ok(self.runtime.block_on(
+            self.transport
+                .call(self.endpoints[index].endpoint_addr.clone(), &frame),
+        )?)
     }
 
     fn stop(&mut self, index: usize) -> Result<()> {
@@ -766,15 +819,20 @@ impl Drop for ProcessNodes {
     }
 }
 
-fn wait_for_path(success: &Path, error: &Path) -> Result<()> {
-    for _ in 0..100 {
-        if success.exists() {
-            return Ok(());
-        }
-        if error.exists() {
-            bail!("process node rejected object request");
-        }
-        thread::sleep(Duration::from_millis(50));
+fn ensure_ok(response: WireResponse, context: &str) -> Result<()> {
+    if response.ok {
+        Ok(())
+    } else {
+        bail!(
+            "{context} failed: {}",
+            response.error_code.as_deref().unwrap_or("unknown")
+        )
     }
-    bail!("process node request timed out")
+}
+
+fn network_now() -> Result<i64> {
+    Ok(std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs()
+        .try_into()?)
 }

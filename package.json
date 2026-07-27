@@ -15,6 +15,7 @@
     "test:integration": "pnpm --filter @arcane-commons/api test:d1 && cargo run -p arcane-mesh-cli -- verify-mvp",
     "build": "pnpm --filter @arcane-commons/api build && pnpm --filter @arcane-commons/desktop build && pnpm --filter @arcane-commons/site build && cargo build --workspace --all-features",
     "demo:up": "cargo run -p arcane-mesh-cli -- demo up",
+    "demo:smoke": "cargo run -p arcane-mesh-cli -- demo smoke",
     "demo:down": "cargo run -p arcane-mesh-cli -- demo down",
     "verify:mvp": "cargo run -p arcane-mesh-cli -- verify-mvp"
   }

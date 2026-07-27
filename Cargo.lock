@@ -161,6 +161,7 @@ dependencies = [
  "arcane-mesh-control",
  "arcane-mesh-core",
  "arcane-mesh-node",
+ "arcane-mesh-protocol",
  "arcane-mesh-testkit",
  "blake3",
  "clap",
@@ -168,6 +169,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
  "zeroize",
 ]
 
@@ -232,6 +234,7 @@ name = "arcane-mesh-protocol"
 version = "0.1.0"
 dependencies = [
  "arcane-mesh-core",
+ "base64 0.22.1",
  "iroh",
  "rusqlite",
  "serde",

@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use arcane_mesh_core::identity::MembershipCredential;
+use iroh::EndpointAddr;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -8,8 +9,18 @@ pub mod transport;
 
 pub const PROTOCOL_ID: &str = "arcane-commons-mesh/1";
 pub const MAX_OBJECT_BYTES: usize = 4 * 1024 * 1024 + 128 * 1024;
-pub const MAX_FRAME_BYTES: usize = MAX_OBJECT_BYTES + 16 * 1024;
+pub const MAX_FRAME_BYTES: usize = MAX_OBJECT_BYTES * 4 / 3 + 64 * 1024;
 pub const REQUEST_TTL_SECONDS: i64 = 300;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LocalNodeNetworkConfig {
+    pub community_root_public_key: [u8; 32],
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LocalNodeEndpoint {
+    pub endpoint_addr: EndpointAddr,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Operation {

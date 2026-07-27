@@ -42,12 +42,16 @@ verification. Evidence is written to `.verify/verify-mvp-report.json`.
 ```sh
 pnpm demo:up
 curl http://127.0.0.1:8787/health
+pnpm demo:smoke
 pnpm demo:down
 ```
 
 This starts a local Worker with D1, three storage node processes, and one auditor
-process. All state and logs stay under `.demo/`. `demo:down` stops recorded
-processes and removes that directory.
+process. Each node has a separate iroh endpoint, identity, replay database, and
+object store. `demo:smoke` sends random ciphertext through authenticated QUIC,
+stores it on all three nodes, reads it back, and verifies all three CIDs. All
+state and logs stay under `.demo/`. `demo:down` stops recorded processes and
+removes that directory. See `docs/NETWORK_LOCAL.md`.
 
 ## Exercise the encrypted CLI vault
 
