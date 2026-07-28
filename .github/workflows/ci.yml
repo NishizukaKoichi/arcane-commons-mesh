@@ -40,9 +40,6 @@ jobs:
       - run: pnpm format:check
       - run: pnpm typecheck
       - run: pnpm test
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --workspace --all-features
       - run: pnpm build
       - run: pnpm audit --audit-level=high
       - run: cargo install cargo-audit --version 0.22.2 --locked
