@@ -212,7 +212,7 @@ export function App() {
                 setConnectingMesh(true);
                 try {
                   const status = await invoke<LocalMeshStatus>("connect_local_mesh", {
-                    root: "/Volumes/Pensive/arcane-commons-mesh/.demo"
+                    root: null
                   });
                   setMesh(status);
                   setNotice(`${status.healthyNodes}拠点へ安全に接続しました`);

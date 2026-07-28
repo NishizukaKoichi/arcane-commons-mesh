@@ -21,8 +21,9 @@ copy of valuable data.
 Storage providers can observe ciphertext size, timing, placement, and access
 patterns. The system is not anonymous. Final-chunk padding does not hide total
 file size. A single-machine multi-process demo proves process-failure recovery,
-not geographic independence. The desktop itself uses multiple object stores on
-the same device and therefore does not survive loss of that device. Full-blob
+not geographic independence. When connected, the desktop uses three separate
+loopback QUIC node processes; otherwise it falls back to app-local object stores.
+Neither mode survives loss of that device. Full-blob
 sampling is not proof of retrievability
 and remains susceptible to collusion and timing strategies.
 

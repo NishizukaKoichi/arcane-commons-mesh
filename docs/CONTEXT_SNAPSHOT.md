@@ -2,7 +2,7 @@
 
 - Date: 2026-07-28
 - Scope: desktop-to-single-Mac, three-process authenticated network milestone
-- Canonical repo: `/Volumes/Pensive/arcane-commons-mesh`, `main`
+- Canonical repo: resolved Git checkout, `main`
 - Source of truth: `CODEX_MASTER_PROMPT.md`, running code, ADRs, and this snapshot
 
 ## Goal and success criteria

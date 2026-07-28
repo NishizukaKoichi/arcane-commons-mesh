@@ -1,0 +1,26 @@
+name: Feature request
+description: Propose a focused, testable improvement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: User need
+      description: What user or operator problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Describe the smallest coherent behavior change.
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Security and data-loss impact
+      description: Explain changes to keys, file/network I/O, recovery, membership, or compatibility.
+    validations:
+      required: true

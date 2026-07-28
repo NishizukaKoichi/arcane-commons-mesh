@@ -171,13 +171,11 @@ fn main() -> Result<()> {
 
 fn doctor() -> Result<()> {
     let current = fs::canonicalize(".")?;
-    let canonical = fs::canonicalize("/Volumes/Pensive")
-        .context("Pensive is not mounted at /Volumes/Pensive")?;
-    if !current.starts_with(&canonical) {
-        bail!("current directory is not inside the canonical Pensive volume");
-    }
-    println!("repository: {}", current.display());
-    println!("canonical volume: {}", canonical.display());
+    let repository = current
+        .ancestors()
+        .find(|candidate| candidate.join(".git").exists())
+        .context("current directory is not inside a Git checkout")?;
+    println!("repository: {}", repository.display());
     println!("protocol: arcane-commons-mesh/1");
     println!("status: local prerequisites ok");
     Ok(())

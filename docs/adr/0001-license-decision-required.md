@@ -1,11 +1,12 @@
-# ADR 0001: License decision required
+# ADR 0001: MIT license
 
-Status: open — 2026-07-26.
+Status: accepted — 2026-07-29.
 
-No `LICENSE` is created because this is an owner decision. Apache-2.0 is
-permissive and includes an explicit patent grant. MPL-2.0 requires modifications
-to covered files to remain available while permitting combination with proprietary
-code. AGPL-3.0 requires corresponding source for modified network-served versions.
+The project is released under the MIT License so individuals and organizations
+can use, fork, modify, redistribute, and continue the work with minimal legal
+friction.
 
-The owner should choose based on the intended commons governance and commercial
-integration policy. Until then, redistribution rights are not granted.
+Alternatives considered were MPL-2.0 and AGPL-3.0. Their reciprocal obligations
+better protect a software commons, but also raise the adoption and contribution
+barrier for this early experimental project. Relicensing future contributions
+would require the relevant copyright holders' consent.

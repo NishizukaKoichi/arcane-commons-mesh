@@ -2,9 +2,9 @@
 
 ## Canonical workspace
 
-- The only canonical repository is `/Volumes/Pensive/arcane-commons-mesh`.
-- Resolve the mount, working directory, and Git root before editing.
-- Never fall back to iCloud, Desktop, Documents, Downloads, or `/tmp`.
+- Treat the resolved Git root of the active clone as the canonical repository.
+- Resolve the working directory and Git root before editing.
+- Never combine files from multiple clones, archives, or backup copies.
 
 ## Repository layout
 
@@ -27,7 +27,9 @@ Also run Rust fmt, clippy with warnings denied, tests, and build for the workspa
   raw invite codes, tokens, plaintext file names, paths, or contents.
 - Cloudflare stores coordination metadata only, never user blobs or decryption keys.
 - Storage credit is integer, non-transferable, non-financial, and never voting weight.
-- No real blockchain, wallet, RPC, contract, push, or deployment in v0.1.
+- No real blockchain, wallet, RPC, or contract in v0.1.
+- Never deploy, push, or create paid infrastructure without the current user's
+  explicit authorization.
 - Storage nodes only access an explicitly selected root, reject traversal and links,
   verify CIDs, enforce quotas, and use atomic writes.
 

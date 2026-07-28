@@ -2,7 +2,7 @@
 
 | ID | Condition | Evidence |
 |---:|---|---|
-| 1 | Canonical Pensive repository | resolved mount and Git-root checks |
+| 1 | Canonical Git checkout | resolved working directory and Git-root checks |
 | 2–9 | all quality/build gates | root package scripts and CI |
 | 10–13 | MVP, replicas, outage, corruption | `verify:mvp` steps 3–8 over authenticated iroh/QUIC child-node endpoints |
 | 14 | clean Recovery Kit recovery | step 13: kit identity/key → control-plane latest pointer → QUIC process-node catalog → manifest → chunks; stale-kit recovery remains valid after GC |

@@ -2,7 +2,7 @@
 
 ## Context snapshot — 2026-07-26
 
-- Canonical repo: `/Volumes/Pensive/arcane-commons-mesh`, branch `main`.
+- Canonical repo: resolved Git checkout, branch `main`.
 - Source of truth: `CODEX_MASTER_PROMPT.md` plus repository behavior and ADRs.
 - Goal: a local, reproducible three-node encrypted cooperative-backup MVP.
 - Out of scope: external deployment/push, paid services, real blockchain,

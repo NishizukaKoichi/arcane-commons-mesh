@@ -5,9 +5,17 @@ members-only cooperative backup mesh. It encrypts data before storage, places
 ciphertext on three local storage-node processes, restores through an outage,
 rejects corruption, and recovers from an encrypted recovery file.
 
+The source is published under the [MIT License](LICENSE) so anyone may fork,
+modify, redistribute, or continue the project. Contributions are welcome, but
+this repository is currently a research/development handoff—not a finished
+backup product.
+
 This is not production-ready, fully decentralized, anonymous, or independently
 security-audited. It has no cryptocurrency, transferable credit, wallet, or real
 blockchain connection.
+
+> **Do not use this as the only copy of valuable data.** The current three-node
+> demo runs on one computer and does not survive loss of that computer.
 
 ## Prerequisites
 
@@ -87,11 +95,13 @@ The unsigned local desktop artifact is built with:
 pnpm --filter @arcane-commons/desktop tauri build --no-bundle
 ```
 
-The current release binary is placed under `target/release/`. Onboarding writes
+The current development binary is placed under `target/release/`. Onboarding writes
 an encrypted Recovery Kit to Downloads and stores identity/vault keys in a
-Stronghold snapshot. Real file additions are streamed, encrypted, and replicated
-to separate object stores on the same Mac. The desktop labels this as local MVP
-storage: it is not geographic redundancy and does not survive loss of that Mac.
+Stronghold snapshot. After `pnpm demo:up`, the desktop can discover the local
+demo from the active clone and send encrypted catalogs, manifests, and chunks to
+three separate loopback QUIC storage-node processes. It verifies replica health
+and restores from a healthy CID-verified copy. Without that connection it uses
+app-local object stores. Neither mode is geographic redundancy.
 The onboarding screen can import a Kit from explicitly supplied storage-node
 folders; automatic remote-node discovery is not part of this local artifact.
 It is an unaudited
@@ -106,3 +116,20 @@ pnpm --filter @arcane-commons/site build
 Its output is placed under `apps/site/dist/`. The site makes no network calls and
 does not imply that a signed public release or geographically independent mesh
 already exists.
+
+## What help is needed
+
+The most useful next milestones are:
+
+1. replace deterministic demo enrollment with secure invitation and membership
+   issuance;
+2. build and verify a Windows storage-node and desktop distribution;
+3. add LAN discovery, then test direct connections between separate machines;
+4. add an explicitly operated encrypted relay path for different networks;
+5. obtain an independent cryptography, recovery, and data-loss review;
+6. prove recovery after the original owner computer is unavailable.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), the
+[threat model](docs/THREAT_MODEL.md), and the
+[local-network guide](docs/NETWORK_LOCAL.md) before changing security or
+protocol behavior.

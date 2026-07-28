@@ -1,14 +1,14 @@
 ---
 import Base from "../layouts/Base.astro";
 ---
-<Base title="ローカル版を試す — 魔法網" description="Arcane Commons Mesh v0.1をPensive上でローカル検証する方法。">
+<Base title="ローカル版を試す — 魔法網" description="Arcane Commons Mesh v0.1を手元のGit cloneで検証する方法。">
   <section class="document-hero download-hero">
     <p class="eyebrow">Local development artifact</p>
     <h1>まず、手元だけで<br />確かめる。</h1>
     <p>署名済み公開リリースはまだありません。現在はソースから、外部デプロイやアカウントなしで15段階の動作を確認できます。</p>
   </section>
   <section class="download-steps">
-    <article><span>01</span><h2>環境を確認</h2><code>pnpm install</code><p>Node 22.13、pnpm 10.13、Rust 1.88を固定しています。</p></article>
+    <article><span>01</span><h2>環境を確認</h2><code>pnpm install</code><p>Node 22.13、pnpm 10.13、Rust 1.91を固定しています。</p></article>
     <article><span>02</span><h2>MVPを検証</h2><code>pnpm verify:mvp</code><p>複製、停止、改ざん、修復、credit、投票、復旧、平文不在、監査を外部ネットなしで確認します。</p></article>
     <article><span>03</span><h2>デスクトップを構築</h2><code>pnpm --filter @arcane-commons/desktop tauri build --no-bundle</code><p>署名なしの開発用macOS実行ファイルを作ります。</p></article>
   </section>

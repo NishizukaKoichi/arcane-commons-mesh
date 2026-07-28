@@ -28,12 +28,12 @@ cargo --version 2>/dev/null || true
 プロジェクトの正本は次の場所にしてください。
 
 ```text
-/Volumes/Pensive/arcane-commons-mesh
+<resolved-git-root>
 ```
 
 ルールは次のとおりです。
 
-- `/Volumes/Pensive` が存在しない場合は停止し、明確なエラーを報告する。
+- Git checkoutを特定できない場合は停止し、明確なエラーを報告する。
 - iCloud、Desktop、Documents、`/tmp`、別のコピーへ自動的にフォールバックしない。
 - 既存ディレクトリがある場合は、内容、Git状態、既存の指示ファイルを調査してから変更する。
 - 空ならGitリポジトリとモノレポを初期化する。
@@ -1556,7 +1556,7 @@ Community root key、identity key、vault keyをCloudflare secretとして置い
 
 以下がすべて真になるまで、完了と報告してはいけません。
 
-1. `/Volumes/Pensive/arcane-commons-mesh`が正本である。
+1. 現在のresolved Git checkoutが正本である。
 2. `pnpm lint`が成功する。
 3. `pnpm format:check`が成功する。
 4. `pnpm typecheck`が成功する。
@@ -1609,7 +1609,7 @@ Community root key、identity key、vault keyをCloudflare secretとして置い
 
 質問は、次の場合だけ行ってください。
 
-- `/Volumes/Pensive`が存在しない。
+- resolved Git checkoutが存在しない。
 - 既存リポジトリに未コミットの競合変更があり、安全に進められない。
 - 秘密情報や有料外部サービスへのアクセスが不可欠になった。
 - 外部deploy、GitHub push、ブロックチェーン接続が必要になった。

@@ -70,7 +70,17 @@ struct LocalMeshStatus {
 }
 
 #[tauri::command]
-fn connect_local_mesh(app: tauri::AppHandle, root: String) -> Result<LocalMeshStatus, String> {
+fn connect_local_mesh(
+    app: tauri::AppHandle,
+    root: Option<String>,
+) -> Result<LocalMeshStatus, String> {
+    let root = root
+        .map(PathBuf::from)
+        .or_else(discover_local_demo_root)
+        .ok_or_else(|| {
+            "3拠点の検証ネットワークが見つかりません。先にローカルネットワークを起動してください"
+                .to_string()
+        })?;
     let root = fs::canonicalize(root).map_err(|_| {
         "3拠点の検証ネットワークが見つかりません。先にローカルネットワークを起動してください"
             .to_string()
@@ -115,6 +125,14 @@ fn connect_local_mesh(app: tauri::AppHandle, root: String) -> Result<LocalMeshSt
         healthy_nodes,
         total_nodes: 3,
     })
+}
+
+fn discover_local_demo_root() -> Option<PathBuf> {
+    let current = std::env::current_dir().ok()?;
+    current
+        .ancestors()
+        .map(|directory| directory.join(".demo"))
+        .find(|candidate| candidate.join("bootstrap.json").is_file())
 }
 
 #[tauri::command]
