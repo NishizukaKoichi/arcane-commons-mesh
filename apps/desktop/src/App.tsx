@@ -61,6 +61,12 @@ type DesktopFileRecord = {
   deleted: boolean;
 };
 
+type LocalMeshStatus = {
+  connected: boolean;
+  healthyNodes: number;
+  totalNodes: number;
+};
+
 function displayDesktopFiles(files: DesktopFileRecord[]): StoredFile[] {
   return files.map((file) => ({
     fileId: file.fileId,
@@ -86,6 +92,12 @@ export function App() {
   const [deleteTarget, setDeleteTarget] = useState<StoredFile | null>(null);
   const [notice, setNotice] = useState("");
   const [mobileNav, setMobileNav] = useState(false);
+  const [mesh, setMesh] = useState<LocalMeshStatus>({
+    connected: false,
+    healthyNodes: 0,
+    totalNodes: 3
+  });
+  const [connectingMesh, setConnectingMesh] = useState(false);
 
   useEffect(() => {
     if (!isTauri()) {
@@ -97,6 +109,13 @@ export function App() {
       .catch((reason) => setNotice(String(reason)))
       .finally(() => setCheckingVault(false));
   }, []);
+
+  useEffect(() => {
+    if (!onboarded || !isTauri()) return;
+    invoke<LocalMeshStatus>("local_mesh_status")
+      .then(setMesh)
+      .catch(() => setMesh({ connected: false, healthyNodes: 0, totalNodes: 3 }));
+  }, [onboarded]);
 
   if (checkingVault) {
     return <main className="onboarding"><p>既存の保管庫を確認しています…</p></main>;
@@ -175,9 +194,38 @@ export function App() {
             </button>
           ))}
         </nav>
-        <div className="network-status">
+        <div className={mesh.connected ? "network-status is-connected" : "network-status"}>
           <span className="status-dot" />
-          <div><strong>ローカルMVP</strong><span>共同体ネットワーク未接続</span></div>
+          <div>
+            <strong>{mesh.connected ? `${mesh.healthyNodes} / ${mesh.totalNodes} 拠点 接続中` : "3拠点ネットワーク"}</strong>
+            <span>{mesh.connected ? "暗号化通信で保存します" : "このMacの検証拠点へ接続"}</span>
+          </div>
+          {!mesh.connected && (
+            <button
+              className="network-connect"
+              disabled={connectingMesh}
+              onClick={async () => {
+                if (!isTauri()) {
+                  setNotice("デスクトップアプリで接続できます");
+                  return;
+                }
+                setConnectingMesh(true);
+                try {
+                  const status = await invoke<LocalMeshStatus>("connect_local_mesh", {
+                    root: "/Volumes/Pensive/arcane-commons-mesh/.demo"
+                  });
+                  setMesh(status);
+                  setNotice(`${status.healthyNodes}拠点へ安全に接続しました`);
+                } catch (reason) {
+                  setNotice(String(reason));
+                } finally {
+                  setConnectingMesh(false);
+                }
+              }}
+            >
+              {connectingMesh ? "確認中…" : "接続"}
+            </button>
+          )}
         </div>
       </aside>
       <main className="workspace">
@@ -194,7 +242,7 @@ export function App() {
           </button>
         </header>
         <div className="page-enter" key={page}>
-          {page === "dashboard" && <Dashboard files={files} onNavigate={setPage} />}
+          {page === "dashboard" && <Dashboard files={files} mesh={mesh} onNavigate={setPage} />}
           {page === "vault" && (
             <Vault
               files={files}
@@ -419,9 +467,11 @@ function Onboarding({
 
 function Dashboard({
   files,
+  mesh,
   onNavigate
 }: {
   files: StoredFile[];
+  mesh: LocalMeshStatus;
   onNavigate: (page: Page) => void;
 }) {
   return (
@@ -429,12 +479,12 @@ function Dashboard({
       <PageTitle eyebrow="今日の状態" title="概要" action={<button className="primary-action compact" onClick={() => onNavigate("vault")}><Plus size={17} /> ファイルを追加</button>} />
       <div className="safety-line">
         <div className="safety-orb"><ShieldCheck size={30} /></div>
-        <div><p>{files.length ? "ローカル複製は正常です" : "保管庫は空です"}</p><strong>{files.length ? "同一端末内に必要な暗号化複製があります" : "ファイルを追加すると暗号化して3領域へ保存します"}</strong></div>
+        <div><p>{files.length ? "暗号化複製は正常です" : "保管庫は空です"}</p><strong>{mesh.connected ? "3つの独立した保存拠点へ暗号化して送ります" : "ファイルを追加すると端末内で暗号化して保存します"}</strong></div>
         <span className="last-backup">{files.length ? "最終バックアップ たった今" : "バックアップなし"}</span>
       </div>
       <div className="metric-row">
         <Metric label="ファイル" value={String(files.length)} detail="暗号化済み" />
-        <Metric label="ローカル複製" value={files.length ? "3 / 3" : "—"} detail="同一端末内・地域分散なし" />
+        <Metric label="保存拠点" value={mesh.connected ? `${mesh.healthyNodes} / ${mesh.totalNodes}` : "未接続"} detail="同一Mac内・独立プロセス" />
         <Metric label="共有容量" value="—" detail="調整API未接続" />
       </div>
       <div className="split-section">
@@ -447,9 +497,9 @@ function Dashboard({
         <section>
           <SectionHeading title="ローカル保存領域" link="管理" onClick={() => onNavigate("storage")} />
           <div className="node-list">
-            <NodeRow name="このMac / 領域 1" state="ローカル" usage="自動管理" />
-            <NodeRow name="このMac / 領域 2" state="ローカル" usage="自動管理" />
-            <NodeRow name="このMac / 領域 3" state="ローカル" usage="自動管理" warning />
+            <NodeRow name="このMac / 拠点 A" state={mesh.healthyNodes >= 1 ? "接続中" : "停止"} usage="暗号化断片のみ" warning={mesh.healthyNodes < 1} />
+            <NodeRow name="このMac / 拠点 B" state={mesh.healthyNodes >= 2 ? "接続中" : "停止"} usage="暗号化断片のみ" warning={mesh.healthyNodes < 2} />
+            <NodeRow name="このMac / 拠点 C" state={mesh.healthyNodes >= 3 ? "接続中" : "停止"} usage="暗号化断片のみ" warning={mesh.healthyNodes < 3} />
           </div>
         </section>
       </div>

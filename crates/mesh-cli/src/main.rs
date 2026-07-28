@@ -411,7 +411,12 @@ async fn service_network_requests(
             payload_cid: arcane_mesh_core::cid(&payload),
             payload,
         };
-        accepted.respond(&response).await?;
+        // A desktop client may disappear immediately after receiving enough
+        // healthy replicas. A single closed response stream must not terminate
+        // the long-lived storage node.
+        if accepted.respond(&response).await.is_err() {
+            continue;
+        }
     }
 }
 

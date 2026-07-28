@@ -208,6 +208,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arcane-mesh-core",
+ "arcane-mesh-protocol",
  "blake3",
  "rand_core 0.6.4",
  "serde",
@@ -216,6 +217,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-stronghold",
  "tempfile",
+ "tokio",
  "zeroize",
 ]
 

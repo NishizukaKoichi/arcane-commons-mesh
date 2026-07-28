@@ -34,9 +34,15 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
 .nav-item:hover { color: #eef1ed; background: rgba(255,255,255,.035); transform: translateX(2px); }
 .nav-item.active { color: #fff; background: var(--deep-soft); box-shadow: inset 2px 0 var(--gold); }
 .network-status { margin-top: auto; border-top: 1px solid #28322d; padding: 20px 10px 0; display: flex; gap: 10px; align-items: center; }
+.network-status > div { flex: 1; min-width: 0; }
 .network-status strong, .network-status span { display: block; font-size: 11px; }
 .network-status span { color: #7e8d84; margin-top: 3px; }
-.status-dot, .presence { width: 8px; height: 8px; border-radius: 50%; background: #69aa7e; box-shadow: 0 0 0 4px rgba(105,170,126,.1); }
+.status-dot, .presence { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: #9b7d43; box-shadow: 0 0 0 4px rgba(199,168,90,.08); }
+.network-status.is-connected .status-dot { background: #69aa7e; box-shadow: 0 0 0 4px rgba(105,170,126,.1); animation: network-arrival 520ms ease both; }
+.network-connect { border: 1px solid #3b4b42; background: transparent; color: #d9dfda; border-radius: 3px; padding: 5px 8px; font-size: 10px; }
+.network-connect:hover:not(:disabled) { border-color: var(--gold); color: var(--gold); }
+@keyframes network-arrival { 50% { transform: scale(1.45); } }
+@media (prefers-reduced-motion: reduce) { .network-status.is-connected .status-dot { animation: none; } }
 
 .workspace { min-width: 0; }
 .topbar { height: 66px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; padding: 0 42px; background: rgba(245,243,237,.9); backdrop-filter: blur(16px); position: sticky; top: 0; z-index: 4; }

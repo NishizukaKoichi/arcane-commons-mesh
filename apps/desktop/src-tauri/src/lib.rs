@@ -7,10 +7,14 @@ use arcane_mesh_core::{
     },
     cid,
     crypto::{decrypt, SecretKey},
-    identity::Identity,
+    identity::{Identity, MembershipClaims, NodeCertificateClaims},
     recovery::{export, import, RecoveryPayload, RecoveryVaultPointer},
     store::ObjectStore,
     vault::encrypt_stream_each,
+};
+use arcane_mesh_protocol::{
+    transport::{IrohTransport, WireFrame},
+    LocalNodeEndpoint, Operation, Request,
 };
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -30,6 +34,7 @@ struct DesktopStatus {
     chunk_size_bytes: usize,
     secret_store: &'static str,
     has_vault: bool,
+    local_mesh_connected: bool,
 }
 
 #[tauri::command]
@@ -44,7 +49,90 @@ fn desktop_status_for_dir(data_dir: &Path) -> DesktopStatus {
         chunk_size_bytes: arcane_mesh_core::DEFAULT_CHUNK_SIZE,
         secret_store: "stronghold",
         has_vault: data_dir.join("vault-state.json").is_file(),
+        local_mesh_connected: data_dir.join("local-mesh-profile.json").is_file(),
     }
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalMeshProfile {
+    root: String,
+    community_id: String,
+    endpoints: Vec<LocalNodeEndpoint>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalMeshStatus {
+    connected: bool,
+    healthy_nodes: usize,
+    total_nodes: usize,
+}
+
+#[tauri::command]
+fn connect_local_mesh(app: tauri::AppHandle, root: String) -> Result<LocalMeshStatus, String> {
+    let root = fs::canonicalize(root).map_err(|_| {
+        "3拠点の検証ネットワークが見つかりません。先にローカルネットワークを起動してください"
+            .to_string()
+    })?;
+    let bootstrap: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("bootstrap.json")).map_err(|_| {
+            "接続情報が見つかりません。ローカルネットワークを起動し直してください".to_string()
+        })?)
+        .map_err(|error| error.to_string())?;
+    let community_id = bootstrap
+        .get("communityId")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "接続情報が壊れています".to_string())?
+        .to_owned();
+    let endpoints = ["storage-a", "storage-b", "storage-c"]
+        .into_iter()
+        .map(|name| {
+            serde_json::from_slice::<LocalNodeEndpoint>(
+                &fs::read(root.join("nodes").join(name).join("network-endpoint.json"))
+                    .map_err(|_| format!("{name} は停止しています"))?,
+            )
+            .map_err(|error| error.to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let profile = LocalMeshProfile {
+        root: root.display().to_string(),
+        community_id,
+        endpoints,
+    };
+    let data_dir = desktop_data_dir(&app).map_err(|error| error.to_string())?;
+    let healthy_nodes = network_ping(&data_dir, &profile).map_err(|error| error.to_string())?;
+    if healthy_nodes == 0 {
+        return Err("3拠点のどれにも接続できませんでした".into());
+    }
+    fs::write(
+        data_dir.join("local-mesh-profile.json"),
+        serde_json::to_vec_pretty(&profile).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(LocalMeshStatus {
+        connected: true,
+        healthy_nodes,
+        total_nodes: 3,
+    })
+}
+
+#[tauri::command]
+fn local_mesh_status(app: tauri::AppHandle) -> Result<LocalMeshStatus, String> {
+    let data_dir = desktop_data_dir(&app).map_err(|error| error.to_string())?;
+    let Some(profile) = load_local_mesh_profile(&data_dir).map_err(|e| e.to_string())? else {
+        return Ok(LocalMeshStatus {
+            connected: false,
+            healthy_nodes: 0,
+            total_nodes: 3,
+        });
+    };
+    let healthy_nodes = network_ping(&data_dir, &profile).unwrap_or(0);
+    Ok(LocalMeshStatus {
+        connected: healthy_nodes > 0,
+        healthy_nodes,
+        total_nodes: 3,
+    })
 }
 
 #[derive(Serialize)]
@@ -267,7 +355,9 @@ pub fn run() {
             restore_vault_file,
             delete_vault_file,
             gc_vault,
-            configure_storage
+            configure_storage,
+            connect_local_mesh,
+            local_mesh_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running Arcane Commons Mesh");
@@ -985,6 +1075,9 @@ fn desktop_manifest(
 }
 
 fn desktop_replica_count(data_dir: &Path, object_cids: &[String]) -> anyhow::Result<usize> {
+    if let Some(profile) = load_local_mesh_profile(data_dir)? {
+        return network_replica_count(data_dir, &profile, object_cids);
+    }
     let nodes = desktop_nodes(data_dir)?;
     Ok((0..3)
         .filter(|index| {
@@ -1027,6 +1120,9 @@ fn desktop_nodes(data_dir: &Path) -> anyhow::Result<Vec<ObjectStore>> {
 }
 
 fn desktop_replicate(data_dir: &Path, bytes: &[u8], target: usize) -> anyhow::Result<String> {
+    if let Some(profile) = load_local_mesh_profile(data_dir)? {
+        return network_replicate(data_dir, &profile, bytes, target.min(3));
+    }
     let object_cid = cid(bytes);
     let mut stored = 0;
     for node in desktop_nodes(data_dir)? {
@@ -1041,12 +1137,235 @@ fn desktop_replicate(data_dir: &Path, bytes: &[u8], target: usize) -> anyhow::Re
 }
 
 fn desktop_restore(data_dir: &Path, object_cid: &str) -> anyhow::Result<Vec<u8>> {
+    if let Some(profile) = load_local_mesh_profile(data_dir)? {
+        return network_restore(data_dir, &profile, object_cid);
+    }
     for node in desktop_nodes(data_dir)? {
         if let Ok(bytes) = node.get(object_cid) {
             return Ok(bytes);
         }
     }
     anyhow::bail!("利用できる安全な複製がありません")
+}
+
+fn load_local_mesh_profile(data_dir: &Path) -> anyhow::Result<Option<LocalMeshProfile>> {
+    let path = data_dir.join("local-mesh-profile.json");
+    if !path.is_file() {
+        return Ok(None);
+    }
+    Ok(Some(serde_json::from_slice(&fs::read(path)?)?))
+}
+
+fn network_runtime() -> anyhow::Result<tokio::runtime::Runtime> {
+    Ok(tokio::runtime::Runtime::new()?)
+}
+
+fn network_client(
+    data_dir: &Path,
+    profile: &LocalMeshProfile,
+) -> anyhow::Result<(
+    tokio::runtime::Runtime,
+    IrohTransport,
+    Identity,
+    arcane_mesh_core::identity::MembershipCredential,
+    arcane_mesh_core::identity::NodeCertificate,
+)> {
+    let runtime = network_runtime()?;
+    let transport = runtime.block_on(IrohTransport::bind_local(
+        data_dir.join("desktop-network-replay.sqlite3"),
+    ))?;
+    let root = Identity::from_seed([1; 32]);
+    let client = Identity::from_seed([11; 32]);
+    let now = unix_now()?;
+    let credential = MembershipClaims {
+        credential_version: 1,
+        community_id: profile.community_id.clone(),
+        member_public_key: client.public_key(),
+        member_id: client.member_id(),
+        roles: vec![
+            "admin".into(),
+            "auditor".into(),
+            "member".into(),
+            "node".into(),
+        ],
+        issued_at: now - 60,
+        expires_at: now + 3600,
+        serial: u64::try_from(now).unwrap_or_default(),
+        issuer_public_key: root.public_key(),
+    }
+    .issue(&root);
+    let certificate = NodeCertificateClaims {
+        certificate_version: 1,
+        node_id: "desktop-local-client".into(),
+        community_id: profile.community_id.clone(),
+        owner_member_id: client.member_id(),
+        endpoint_public_key: transport.addr().id.to_string(),
+        allowed_roles: vec!["node".into()],
+        max_storage_bytes: 10 * 1024 * 1024 * 1024,
+        issued_at: now - 60,
+        expires_at: now + 3600,
+    }
+    .issue(&client);
+    Ok((runtime, transport, client, credential, certificate))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn network_frame(
+    profile: &LocalMeshProfile,
+    identity: &Identity,
+    credential: &arcane_mesh_core::identity::MembershipCredential,
+    certificate: &arcane_mesh_core::identity::NodeCertificate,
+    operation: Operation,
+    object_cid: Option<&str>,
+    payload: Vec<u8>,
+    sequence: usize,
+) -> anyhow::Result<WireFrame> {
+    let now = unix_now()?;
+    let mut random = OsRng;
+    let request = Request {
+        protocol_version: 1,
+        request_id: format!("desktop-{now}-{sequence}-{:016x}", random.next_u64()),
+        community_id: profile.community_id.clone(),
+        node_id: "desktop-local-client".into(),
+        operation,
+        object_cid: object_cid.map(str::to_owned),
+        issued_at: now,
+        expires_at: now + 300,
+        credential: credential.clone(),
+    };
+    let request_signature = identity
+        .sign(&request.signing_bytes(&cid(&payload)))
+        .to_vec();
+    Ok(WireFrame {
+        request,
+        request_signature,
+        node_certificate: certificate.clone(),
+        node_owner_public_key: identity.public_key(),
+        payload,
+    })
+}
+
+fn network_ping(data_dir: &Path, profile: &LocalMeshProfile) -> anyhow::Result<usize> {
+    let (runtime, transport, identity, credential, certificate) =
+        network_client(data_dir, profile)?;
+    Ok(profile
+        .endpoints
+        .iter()
+        .enumerate()
+        .filter(|(index, endpoint)| {
+            let Ok(frame) = network_frame(
+                profile,
+                &identity,
+                &credential,
+                &certificate,
+                Operation::Ping,
+                None,
+                Vec::new(),
+                *index,
+            ) else {
+                return false;
+            };
+            runtime
+                .block_on(transport.call(endpoint.endpoint_addr.clone(), &frame))
+                .is_ok_and(|response| response.ok)
+        })
+        .count())
+}
+
+fn network_replicate(
+    data_dir: &Path,
+    profile: &LocalMeshProfile,
+    bytes: &[u8],
+    target: usize,
+) -> anyhow::Result<String> {
+    let object_cid = cid(bytes);
+    let (runtime, transport, identity, credential, certificate) =
+        network_client(data_dir, profile)?;
+    let mut stored = 0;
+    for (index, endpoint) in profile.endpoints.iter().enumerate() {
+        let frame = network_frame(
+            profile,
+            &identity,
+            &credential,
+            &certificate,
+            Operation::PutObject,
+            Some(&object_cid),
+            bytes.to_vec(),
+            index,
+        )?;
+        if runtime
+            .block_on(transport.call(endpoint.endpoint_addr.clone(), &frame))
+            .is_ok_and(|response| response.ok)
+        {
+            stored += 1;
+        }
+    }
+    if stored < target {
+        anyhow::bail!("安全なネットワーク複製を{stored}/{target}個しか作成できませんでした");
+    }
+    Ok(object_cid)
+}
+
+fn network_restore(
+    data_dir: &Path,
+    profile: &LocalMeshProfile,
+    object_cid: &str,
+) -> anyhow::Result<Vec<u8>> {
+    let (runtime, transport, identity, credential, certificate) =
+        network_client(data_dir, profile)?;
+    for (index, endpoint) in profile.endpoints.iter().enumerate() {
+        let frame = network_frame(
+            profile,
+            &identity,
+            &credential,
+            &certificate,
+            Operation::GetObject,
+            Some(object_cid),
+            Vec::new(),
+            index,
+        )?;
+        if let Ok(response) =
+            runtime.block_on(transport.call(endpoint.endpoint_addr.clone(), &frame))
+        {
+            if response.ok && cid(&response.payload) == object_cid {
+                return Ok(response.payload);
+            }
+        }
+    }
+    anyhow::bail!("利用できる安全なネットワーク複製がありません")
+}
+
+fn network_replica_count(
+    data_dir: &Path,
+    profile: &LocalMeshProfile,
+    object_cids: &[String],
+) -> anyhow::Result<usize> {
+    let (runtime, transport, identity, credential, certificate) =
+        network_client(data_dir, profile)?;
+    Ok(profile
+        .endpoints
+        .iter()
+        .enumerate()
+        .filter(|(index, endpoint)| {
+            object_cids.iter().all(|object_cid| {
+                let Ok(frame) = network_frame(
+                    profile,
+                    &identity,
+                    &credential,
+                    &certificate,
+                    Operation::HasObject,
+                    Some(object_cid),
+                    Vec::new(),
+                    *index,
+                ) else {
+                    return false;
+                };
+                runtime
+                    .block_on(transport.call(endpoint.endpoint_addr.clone(), &frame))
+                    .is_ok_and(|response| response.ok && response.payload == b"true")
+            })
+        })
+        .count())
 }
 
 fn load_desktop_state(data_dir: &Path) -> anyhow::Result<DesktopVaultState> {
@@ -1166,6 +1485,53 @@ impl<R: Read> Read for HashingReader<'_, R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn running_local_mesh_accepts_desktop_storage_round_trip() {
+        let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let demo_root = repository.join(".demo");
+        if !demo_root.join("bootstrap.json").is_file() {
+            return;
+        }
+        let bootstrap: serde_json::Value =
+            serde_json::from_slice(&fs::read(demo_root.join("bootstrap.json")).unwrap()).unwrap();
+        let profile = LocalMeshProfile {
+            root: demo_root.display().to_string(),
+            community_id: bootstrap["communityId"].as_str().unwrap().to_owned(),
+            endpoints: ["storage-a", "storage-b", "storage-c"]
+                .into_iter()
+                .map(|name| {
+                    serde_json::from_slice(
+                        &fs::read(
+                            demo_root
+                                .join("nodes")
+                                .join(name)
+                                .join("network-endpoint.json"),
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap()
+                })
+                .collect(),
+        };
+        let client_data = tempfile::tempdir().unwrap();
+        let encrypted_blob = b"desktop-network-ciphertext-fixture";
+        let object_cid =
+            network_replicate(client_data.path(), &profile, encrypted_blob, 3).unwrap();
+        assert_eq!(
+            network_replica_count(
+                client_data.path(),
+                &profile,
+                std::slice::from_ref(&object_cid),
+            )
+            .unwrap(),
+            3
+        );
+        assert_eq!(
+            network_restore(client_data.path(), &profile, &object_cid).unwrap(),
+            encrypted_blob
+        );
+    }
 
     #[test]
     fn desktop_reports_shared_core_and_stronghold() {
