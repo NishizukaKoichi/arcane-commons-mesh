@@ -23,6 +23,17 @@ blockchain connection.
 - Node 22.13 and pnpm 10.13
 - Rust 1.91
 
+## Download the CLI
+
+Prebuilt `acmctl` archives for Apple silicon macOS, Intel macOS, x86-64 Linux,
+and x86-64 Windows are published on the
+[GitHub Releases page](https://github.com/NishizukaKoichi/arcane-commons-mesh/releases).
+Every archive has a separate SHA-256 checksum. Verify it before extracting, then
+run `acmctl doctor`. These binaries are reproducibly built by GitHub Actions but
+are not code-signed, notarized, or independently audited. See
+[`docs/RELEASE.md`](docs/RELEASE.md) for exact installation and verification
+steps.
+
 ## Verify locally
 
 ```sh
@@ -95,9 +106,10 @@ The unsigned local desktop artifact is built with:
 pnpm --filter @arcane-commons/desktop tauri build --no-bundle
 ```
 
-The current development binary is placed under `target/release/`. Onboarding writes
-an encrypted Recovery Kit to Downloads and stores identity/vault keys in a
-Stronghold snapshot. After `pnpm demo:up`, the desktop can discover the local
+The current development binary is placed under `target/release/`. GitHub Releases
+currently distribute the CLI, not the unsigned Tauri desktop application.
+Onboarding writes an encrypted Recovery Kit to Downloads and stores identity/vault
+keys in a Stronghold snapshot. After `pnpm demo:up`, the desktop can discover the local
 demo from the active clone and send encrypted catalogs, manifests, and chunks to
 three separate loopback QUIC storage-node processes. It verifies replica health
 and restores from a healthy CID-verified copy. Without that connection it uses

@@ -6,6 +6,14 @@
   "devDependencies": {
     "playwright": "1.62.0"
   },
+  "pnpm": {
+    "overrides": {
+      "fast-uri": "3.1.5",
+      "js-yaml": "4.3.1",
+      "nanoid@<3.3.17": "3.3.17",
+      "undici": "7.29.0"
+    }
+  },
   "scripts": {
     "dev": "cargo run -p arcane-mesh-cli -- doctor",
     "lint": "pnpm --filter @arcane-commons/api lint && pnpm --filter @arcane-commons/desktop lint && pnpm --filter @arcane-commons/site lint && cargo clippy --workspace --all-targets --all-features -- -D warnings",

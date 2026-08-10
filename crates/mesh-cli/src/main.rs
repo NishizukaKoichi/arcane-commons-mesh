@@ -173,9 +173,12 @@ fn doctor() -> Result<()> {
     let current = fs::canonicalize(".")?;
     let repository = current
         .ancestors()
-        .find(|candidate| candidate.join(".git").exists())
-        .context("current directory is not inside a Git checkout")?;
-    println!("repository: {}", repository.display());
+        .find(|candidate| candidate.join(".git").exists());
+    println!("working_directory: {}", current.display());
+    match repository {
+        Some(path) => println!("repository: {}", path.display()),
+        None => println!("repository: not detected (release binary mode)"),
+    }
     println!("protocol: arcane-commons-mesh/1");
     println!("status: local prerequisites ok");
     Ok(())

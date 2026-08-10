@@ -1,19 +1,19 @@
 ---
 import Base from "../layouts/Base.astro";
 ---
-<Base title="ローカル版を試す — 魔法網" description="Arcane Commons Mesh v0.1を手元のGit cloneで検証する方法。">
+<Base title="ローカル版を試す — 魔法網" description="Arcane Commons Mesh v0.1をGitHub Releasesまたはソースから試す方法。">
   <section class="document-hero download-hero">
     <p class="eyebrow">Local development artifact</p>
     <h1>まず、手元だけで<br />確かめる。</h1>
-    <p>署名済み公開リリースはまだありません。現在はソースから、外部デプロイやアカウントなしで15段階の動作を確認できます。</p>
+    <p>GitHub ReleasesからCLIを入手し、SHA-256を確認して試せます。全15段階の検証とデスクトップ版の構築は、公開ソースから外部アカウントなしで再現できます。</p>
   </section>
   <section class="download-steps">
-    <article><span>01</span><h2>環境を確認</h2><code>pnpm install</code><p>Node 22.13、pnpm 10.13、Rust 1.91を固定しています。</p></article>
-    <article><span>02</span><h2>MVPを検証</h2><code>pnpm verify:mvp</code><p>複製、停止、改ざん、修復、credit、投票、復旧、平文不在、監査を外部ネットなしで確認します。</p></article>
-    <article><span>03</span><h2>デスクトップを構築</h2><code>pnpm --filter @arcane-commons/desktop tauri build --no-bundle</code><p>署名なしの開発用macOS実行ファイルを作ります。</p></article>
+    <article><span>01</span><h2>CLIを入手</h2><code>github.com/NishizukaKoichi/arcane-commons-mesh/releases</code><p>macOS、Linux、Windows用のarchiveと隣のSHA-256を取得し、展開前に照合します。</p><a class="quiet-link" href="https://github.com/NishizukaKoichi/arcane-commons-mesh/releases">GitHub Releasesへ →</a></article>
+    <article><span>02</span><h2>起動を確認</h2><code>./acmctl doctor</code><p>配布CLIは署名・notarize前の研究用artifactです。価値あるデータの唯一の保管先にはしないでください。</p></article>
+    <article><span>03</span><h2>全体を検証</h2><code>pnpm verify:mvp</code><p>cloneしたソースで、複製、停止、改ざん、修復、credit、投票、復旧、平文不在、監査を確認します。</p></article>
   </section>
   <section class="download-warning">
     <strong>価値あるデータの唯一のコピーには使わないでください。</strong>
-    <p>v0.1は独立セキュリティ監査前の技術MVPです。本番用の署名、配布、更新、運用監視は未設定です。</p>
+    <p>v0.1は独立セキュリティ監査前の技術MVPです。CLIの自動配布とchecksumはありますが、コード署名、自動更新、地理的に独立した保存網、運用監視は未設定です。</p>
   </section>
 </Base>
