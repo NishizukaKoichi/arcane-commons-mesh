@@ -1,11 +1,17 @@
 #![forbid(unsafe_code)]
 
 pub mod audit;
+pub mod capability;
 pub mod catalog;
+pub mod compute;
 pub mod credit;
 pub mod crypto;
 pub mod identity;
+pub mod legacy;
+pub mod memory;
 pub mod recovery;
+pub mod research;
+pub mod spell;
 pub mod store;
 pub mod vault;
 

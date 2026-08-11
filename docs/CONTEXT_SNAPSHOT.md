@@ -54,3 +54,17 @@ hosted node endpoints. It requires another machine or a consciously selected
 hosted environment to prove device-loss recovery. Research Commons,
 Compute-to-Data, Spell Commons, and Capability Exchange remain later protocol
 phases and are not represented as implemented by this v0.1 release.
+
+## Arcane Commons v1 work in progress — 2026-08-11
+
+The next implementation line now has executable protocol primitives for signed
+research causal records, scoped and expiring Spell contracts, portable Capability
+Manifests with exact non-governance revenue allocation, measured execution
+attestations, provenance-aware Pensive entries and grants, and time-locked
+multi-guardian Legacy directives. `pnpm verify:commons` exercises nine connected
+steps and writes machine-readable evidence.
+
+This is an intentionally committed intermediate boundary, not a v1 completion
+claim. Grimoire confirmation, federation and full export, persistent API/UI
+journeys, real payment adapters, real confidential-compute attestation, integrated
+Mesh storage, and end-to-end release verification remain required.

@@ -49,6 +49,17 @@ impl Identity {
     }
 }
 
+pub fn verify_signature(
+    public_key: &[u8; 32],
+    message: &[u8],
+    signature: &[u8],
+) -> Result<(), IdentityError> {
+    let key = VerifyingKey::from_bytes(public_key).map_err(|_| IdentityError::PublicKey)?;
+    let signature = Signature::from_slice(signature).map_err(|_| IdentityError::Signature)?;
+    key.verify(message, &signature)
+        .map_err(|_| IdentityError::Signature)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MembershipClaims {
     pub credential_version: u16,

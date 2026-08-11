@@ -56,6 +56,20 @@ consumption, forbidden financial-route checks, one-member-one-vote, clean
 Recovery Kit restore, plaintext absence checks, and audit-chain/Merkle
 verification. Evidence is written to `.verify/verify-mvp-report.json`.
 
+The in-progress Arcane Commons v1 protocol slice can be exercised with:
+
+```sh
+pnpm verify:commons
+```
+
+It verifies nine additional steps spanning signed Research Commons causal
+records, bounded Spell contracts, portable Capability Manifests and exact revenue
+splits, measured Compute-to-Data attestations, provenance-aware Pensive grants,
+and time-locked multi-guardian Legacy directives. Evidence is written to
+`.verify/verify-commons-report.json`. These protocol primitives are implemented;
+the complete v1 product journeys, federation/export, Grimoire workflow, and UI/API
+integration remain in progress and are not part of the v0.1.0 completion claim.
+
 ## Run the local demo
 
 ```sh

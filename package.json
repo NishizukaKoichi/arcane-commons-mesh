@@ -25,6 +25,7 @@
     "demo:up": "cargo run -p arcane-mesh-cli -- demo up",
     "demo:smoke": "cargo run -p arcane-mesh-cli -- demo smoke",
     "demo:down": "cargo run -p arcane-mesh-cli -- demo down",
-    "verify:mvp": "cargo run -p arcane-mesh-cli -- verify-mvp"
+    "verify:mvp": "cargo run -p arcane-mesh-cli -- verify-mvp",
+    "verify:commons": "cargo run -p arcane-mesh-cli -- verify-commons"
   }
 }

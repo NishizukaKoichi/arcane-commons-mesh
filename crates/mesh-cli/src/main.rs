@@ -2,6 +2,7 @@
 
 mod local_vault;
 mod verify;
+mod verify_commons;
 
 use anyhow::{bail, Context, Result};
 use arcane_mesh_control::LocalControlPlane;
@@ -88,6 +89,7 @@ enum Command {
         command: DemoCommand,
     },
     VerifyMvp,
+    VerifyCommons,
 }
 
 #[derive(Subcommand)]
@@ -166,6 +168,7 @@ fn main() -> Result<()> {
         Command::Node { command } => node(command),
         Command::Demo { command } => demo(command),
         Command::VerifyMvp => verify::verify_mvp(),
+        Command::VerifyCommons => verify_commons::verify_commons(),
     }
 }
 
