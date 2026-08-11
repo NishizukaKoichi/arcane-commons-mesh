@@ -1,97 +1,36 @@
-# Context snapshot
+# Current context snapshot
 
-## v1 completion update — 2026-08-11
+Updated: 2026-08-11
 
-The signed Research, Spell, Capability, Compute, Pensive, Grimoire, Legacy and
-Federation primitives now form one eleven-step CLI verification. Worker/D1
-persists authenticated encrypted Commons artifacts. The desktop composes all
-eight user-facing domains and uses the existing Stronghold vault secret for
-encrypted save/reload and signed API-compatible export. CI executes both the
-fifteen-step storage proof and eleven-step Commons proof. Real TEE vendor
-evidence, payment settlement, geographic redundancy and independent audit remain
-deployment work and are not claimed by v1.
+Arcane Commons Mesh v1 is a public MIT-licensed reference implementation for
+sovereign encrypted storage, attributable capabilities, bounded automation,
+community knowledge, recovery and portable federation. The repository includes
+a Rust core and CLI, authenticated three-node local mesh, Worker/D1 coordinator,
+Tauri desktop, static information site, protocol fixtures and release automation.
 
-- Date: 2026-08-11
-- Scope: publicly downloadable v0.1 CLI distribution and verifiable handoff
-- Canonical repo: resolved Git checkout, `main`
-- Source of truth: `CODEX_MASTER_PROMPT.md`, running code, ADRs, and this snapshot
+## Reproducible state
 
-## Goal and success criteria
+- `verify:mvp` proves the fifteen storage, outage, repair, recovery, governance
+  and audit acceptance steps.
+- `verify:commons` proves the thirteen connected Commons steps, including signed
+  confidential-runtime evidence and idempotent settlement receipts.
+- `verify:handoff` proves that adoption, adapter, security, maintenance and
+  incident ownership documents remain present and linked from the README.
+- CI runs code quality, platform build, integration and release workflows.
+- GitHub Releases distribute checksum-protected cross-platform `acmctl` archives.
 
-Make the completed local Commons Kernel / Mesh proof usable from GitHub without
-requiring every evaluator to compile Rust. Platform archives must be built from
-an immutable tag, accompanied by SHA-256 checksums, and preserve the project's
-honest research-MVP boundary.
+## Boundary between code and operations
 
-Out of scope: geographic redundancy, public relay deployment, NAT traversal,
-production membership enrollment, and proof of surviving loss of this Mac.
+The implementation is complete as a reference and handoff. It does not create
+independent operators, geographic redundancy, provider trust roots, merchant
+accounts, legal authority, code signing or an independent security audit. An
+adopter supplies those explicitly and owns the resulting promises. The canonical
+route is `docs/OPERATOR_HANDOFF.md`; portable external integration contracts are
+in `docs/ADAPTER_CONTRACTS.md`.
 
-## Current state
+## Current rollback posture
 
-The v0.1 crypto, storage, control plane, desktop, recovery, authenticated QUIC
-mesh, public MIT handoff, and local acceptance suite exist on `main`. GitHub CI
-is green and the repository is public. This milestone adds tag-driven GitHub
-Release builds for macOS (Apple silicon and Intel), x86-64 Linux, and x86-64
-Windows, with one checksum per immutable archive and public installation docs.
-
-## Decisions
-
-- 2026-07-28: keep the demo loopback-only and relay-free so it is deterministic,
-  free, and requires no external service.
-- 2026-07-28: retain JSON records but encode binary payloads as base64url and
-  enforce a bounded frame sized for the maximum encrypted object.
-- 2026-07-28: persist a public local connection profile in desktop application
-  data and confine deterministic demo credentials to the loopback adapter.
-  Alternative: keep app-local stores. Risk: demo authority is unsuitable for
-  external use. Rollback: remove the profile to restore the app-local path.
-- 2026-07-28: a disconnected response stream must not terminate a storage node;
-  one client may stop after obtaining enough healthy replicas.
-- 2026-08-11: distribute only the CLI in v0.1. The Tauri desktop remains a local
-  development artifact until OS signing, notarization, update infrastructure,
-  and the transitive Linux GTK security warnings are resolved. Alternative:
-  publish unsigned desktop bundles. Risk: users could mistake them for a
-  production-safe backup product. Rollback: remove the release workflow before
-  tagging; published releases are corrected with a new patch tag, never replaced.
-- 2026-08-11: pin patched transitive JavaScript dependencies with narrow pnpm
-  overrides after the release audit found four high-severity advisories. Updating
-  top-level frameworks did not move their lockfile selections. Risk: a transitive
-  compatibility regression; mitigation and rollback: all workspace gates run
-  against the overrides, and removing the override block restores prior resolution.
-
-## Next boundary
-
-The next separate milestone is production membership issuance and independently
-hosted node endpoints. It requires another machine or a consciously selected
-hosted environment to prove device-loss recovery. Research Commons,
-Compute-to-Data, Spell Commons, and Capability Exchange remain later protocol
-phases and are not represented as implemented by this v0.1 release.
-
-## Arcane Commons v1 work in progress — 2026-08-11
-
-The next implementation line now has executable protocol primitives for signed
-research causal records, scoped and expiring Spell contracts, portable Capability
-Manifests with exact non-governance revenue allocation, measured execution
-attestations, provenance-aware Pensive entries and grants, and time-locked
-multi-guardian Legacy directives. `pnpm verify:commons` exercises nine connected
-steps and writes machine-readable evidence.
-
-This is an intentionally committed intermediate boundary, not a v1 completion
-claim. Grimoire quorum confirmation and signed federation export/import are now
-implemented at the protocol layer. Persistent API/UI journeys, real payment
-adapters, real confidential-compute attestation, integrated Mesh storage, and
-end-to-end release verification remain required.
-
-The Worker/D1 boundary now accepts authenticated Commons artifacts as opaque,
-CID-bound encrypted envelopes with owner signatures. It rejects future-dated,
-cross-community, duplicate, CID-mismatched, and forged publications; coordinator
-storage receives neither plaintext nor decryption keys. Migration `0004` and
-OpenAPI routes make this persistence reproducible. Desktop authoring and the
-real confidential-compute/payment adapter boundaries remain next.
-
-The desktop now includes a restrained Commons workspace that walks through the
-eight owner-visible stages from Research to signed export. It keeps the encrypted
-boundary visible and explicitly distinguishes local protocol composition from a
-real TEE or completed payment. Desktop tests exercise all eight stages; Playwright
-verified the completed journey at desktop and mobile widths with no console error
-or Vite overlay. Native persistence and API publication from this workspace are
-still required before v1 completion.
+Protocol state remains signed and exportable. Local demo data is disposable.
+Operators must pin deployments to commits and adapter versions, retain the prior
+compatible release, preserve external Recovery Kits and test loss of the original
+computer before accepting valuable data.

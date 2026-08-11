@@ -1,6 +1,6 @@
 # Governance
 
-v0.1 provides simple one-member-one-vote proposals. An active member has one
+v1 provides simple one-member-one-vote proposals. An active member has one
 current vote per proposal. Casting again replaces the counted choice while every
 cast remains in the append-only audit history.
 

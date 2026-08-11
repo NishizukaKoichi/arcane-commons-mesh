@@ -412,7 +412,7 @@ function Onboarding({
         <div className="brand onboarding-brand"><div className="brand-mark"><Network size={22} /></div><strong>魔法網</strong></div>
         <p className="eyebrow">最初の保管庫</p>
         <h1>大切なものを、<br />自分の鍵で守る。</h1>
-        <p className="intro">このv0.1デスクトップではファイルを端末内で暗号化し、同じ端末上の独立したローカル保存領域へ複製します。</p>
+        <p className="intro">このv1参照デスクトップではファイルを端末内で暗号化し、同じ端末上の独立したローカル保存領域へ複製します。</p>
         <div className="privacy-promise"><ShieldCheck size={22} /><span>共同体ノードへの実接続はCLIのローカル複数プロセス検証に限定されています。</span></div>
       </section>
       <section className="onboarding-form" aria-labelledby="setup-title">

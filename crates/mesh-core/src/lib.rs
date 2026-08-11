@@ -13,6 +13,7 @@ pub mod legacy;
 pub mod memory;
 pub mod recovery;
 pub mod research;
+pub mod settlement;
 pub mod spell;
 pub mod store;
 pub mod vault;

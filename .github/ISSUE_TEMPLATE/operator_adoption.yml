@@ -1,0 +1,39 @@
+name: Operator adoption
+description: Declare an accountable plan to operate or maintain an Arcane Commons fork
+title: "[operator] "
+labels: [operator-adoption]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not include secrets, keys, private reports, provider quotes, credentials, or user data."
+  - type: input
+    id: deployment
+    attributes:
+      label: Deployment or fork
+      description: Public name and repository URL, if available.
+    validations:
+      required: true
+  - type: input
+    id: accountability
+    attributes:
+      label: Accountable operator and jurisdiction
+    validations:
+      required: true
+  - type: textarea
+    id: ownership
+    attributes:
+      label: Named responsibilities
+      description: Security contact, recovery owner, data policy, attestation issuer, settlement operator (if any), and incident channel.
+    validations:
+      required: true
+  - type: checkboxes
+    id: readiness
+    attributes:
+      label: Readiness evidence
+      options:
+        - label: All repository gates pass at a pinned commit.
+          required: true
+        - label: External recovery has been tested without the originating computer.
+          required: true
+        - label: Infrastructure and third-party adapter claims are documented separately from the reference implementation.
+          required: true

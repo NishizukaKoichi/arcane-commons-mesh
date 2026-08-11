@@ -1,13 +1,14 @@
 use anyhow::{ensure, Context, Result};
 use arcane_mesh_core::{
     capability::{CapabilityManifest, OfferingKind, RevenueSplit},
-    compute::ExecutionAttestation,
+    compute::{ConfidentialRuntimeEvidence, ConfidentialRuntimePolicy, ExecutionAttestation},
     federation::{ExportItem, FederationBundle, MigrationReceipt},
     grimoire::GrimoireRecord,
     identity::Identity,
     legacy::{LegacyAction, LegacyDirective},
     memory::{MemoryEntry, MemoryGrant, MemoryProvenance, MemoryStatus},
     research::{ResearchRecord, ResearchRecordKind},
+    settlement::{SettlementInstruction, SettlementReceipt, SettlementStatus},
     spell::{InvocationRequest, SpellContract},
 };
 use serde::Serialize;
@@ -22,9 +23,12 @@ struct CommonsReport {
     capability_id: String,
     spell_contract_id: String,
     execution_id: String,
+    runtime_evidence_id: String,
     memory_entry_id: String,
     grimoire_record_id: String,
     legacy_directive_id: String,
+    settlement_instruction_id: String,
+    settlement_receipt_id: String,
     export_bundle_id: String,
     migration_root: String,
     allocations_minor: Vec<(String, u64)>,
@@ -38,6 +42,8 @@ pub fn verify_commons() -> Result<()> {
     let ratifier_a = Identity::from_seed([85; 32]);
     let ratifier_b = Identity::from_seed([86; 32]);
     let target_operator = Identity::from_seed([87; 32]);
+    let attestation_issuer = Identity::from_seed([88; 32]);
+    let settlement_operator = Identity::from_seed([89; 32]);
 
     let hypothesis = ResearchRecord::issue(
         "commons-demo-research",
@@ -133,6 +139,28 @@ pub fn verify_commons() -> Result<()> {
         "approved runtime produced a signed compute-to-data result",
     );
 
+    let runtime_evidence = ConfidentialRuntimeEvidence::issue(
+        &execution,
+        "conformance.example/tee-adapter",
+        "91".repeat(32),
+        "92".repeat(32),
+        110,
+        130,
+        &attestation_issuer,
+    )?;
+    runtime_evidence.verify(
+        &execution,
+        &ConfidentialRuntimePolicy {
+            trusted_issuer_public_keys: vec![attestation_issuer.public_key()],
+            approved_measurements: vec![runtime_measurement.clone()],
+            now: 113,
+        },
+    )?;
+    step(
+        7,
+        "signed confidential-runtime evidence bound provider quote, nonce, measurement and execution",
+    );
+
     let memory = MemoryEntry::new(
         "research",
         execution.output_cid.clone(),
@@ -152,7 +180,7 @@ pub fn verify_commons() -> Result<()> {
     };
     grant.authorize("research", "result-summary", 0, false, 120)?;
     step(
-        7,
+        8,
         "Pensive memory provenance and least-privilege grant verified",
     );
 
@@ -170,7 +198,7 @@ pub fn verify_commons() -> Result<()> {
     )?;
     grimoire.verify()?;
     step(
-        8,
+        9,
         "Grimoire knowledge confirmed with rationale, exceptions, contributors and quorum",
     );
 
@@ -187,15 +215,41 @@ pub fn verify_commons() -> Result<()> {
         ],
     )?;
     legacy.authorize(150, &["guardian-a".into(), "guardian-b".into()])?;
-    step(9, "time-locked multi-guardian legacy directive verified");
+    step(10, "time-locked multi-guardian legacy directive verified");
 
     let allocations = manifest.allocations()?;
     ensure!(
         allocations.iter().map(|item| item.1).sum::<u64>() == manifest.price_minor,
         "capability allocations do not conserve payment"
     );
+    let settlement_instruction = SettlementInstruction::issue(
+        &manifest,
+        &execution.execution_id,
+        "commons-conformance-order-0001",
+        113,
+        140,
+        &buyer,
+    )?;
+    settlement_instruction.verify(&manifest, 120)?;
+    let settlement_receipt = SettlementReceipt::issue(
+        &settlement_instruction,
+        "conformance-signed-rail",
+        "93".repeat(32),
+        SettlementStatus::Settled,
+        manifest.price_minor,
+        121,
+        &settlement_operator,
+    )?;
+    settlement_receipt.verify(
+        &settlement_instruction,
+        std::slice::from_ref(&settlement_operator.public_key()),
+    )?;
     step(
-        10,
+        11,
+        "idempotent settlement instruction and trusted-operator receipt verified",
+    );
+    step(
+        12,
         "payment allocation conserves value without creating votes",
     );
 
@@ -217,7 +271,7 @@ pub fn verify_commons() -> Result<()> {
     let migration = MigrationReceipt::issue(&bundle, "successor-community", 152, &target_operator)?;
     migration.verify(&bundle)?;
     step(
-        11,
+        13,
         "complete signed export imported by a replaceable successor community",
     );
 
@@ -231,9 +285,11 @@ pub fn verify_commons() -> Result<()> {
             "spell",
             "capability",
             "compute-to-data",
+            "confidential-runtime-evidence",
             "pensive",
             "grimoire",
             "legacy",
+            "settlement-receipt",
             "allocation",
             "federation-export",
         ],
@@ -241,9 +297,12 @@ pub fn verify_commons() -> Result<()> {
         capability_id: manifest.capability_id,
         spell_contract_id: spell.contract_id,
         execution_id: execution.execution_id,
+        runtime_evidence_id: runtime_evidence.evidence_id,
         memory_entry_id: memory.entry_id,
         grimoire_record_id: grimoire.record_id,
         legacy_directive_id: legacy.directive_id,
+        settlement_instruction_id: settlement_instruction.instruction_id,
+        settlement_receipt_id: settlement_receipt.receipt_id,
         export_bundle_id: bundle.bundle_id,
         migration_root: migration.imported_root,
         allocations_minor: allocations,
@@ -251,7 +310,7 @@ pub fn verify_commons() -> Result<()> {
     let output = Path::new(".verify/verify-commons-report.json");
     fs::create_dir_all(output.parent().context("report path has no parent")?)?;
     fs::write(output, serde_json::to_vec_pretty(&report)?)?;
-    println!("verify:commons PASS — all 11 protocol steps succeeded");
+    println!("verify:commons PASS — all 13 protocol steps succeeded");
     println!("evidence={}", output.display());
     Ok(())
 }

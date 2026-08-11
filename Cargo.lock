@@ -155,7 +155,7 @@ dependencies = [
 
 [[package]]
 name = "arcane-mesh-cli"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "arcane-mesh-control",
@@ -175,7 +175,7 @@ dependencies = [
 
 [[package]]
 name = "arcane-mesh-control"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "arcane-mesh-core",
  "blake3",
@@ -187,7 +187,7 @@ dependencies = [
 
 [[package]]
 name = "arcane-mesh-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "argon2",
  "blake3",
@@ -204,7 +204,7 @@ dependencies = [
 
 [[package]]
 name = "arcane-mesh-desktop"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "arcane-mesh-core",
@@ -224,7 +224,7 @@ dependencies = [
 
 [[package]]
 name = "arcane-mesh-node"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "arcane-mesh-core",
  "arcane-mesh-protocol",
@@ -234,7 +234,7 @@ dependencies = [
 
 [[package]]
 name = "arcane-mesh-protocol"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "arcane-mesh-core",
  "base64 0.22.1",
@@ -249,7 +249,7 @@ dependencies = [
 
 [[package]]
 name = "arcane-mesh-testkit"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "arcane-mesh-core",
  "arcane-mesh-node",
@@ -3305,9 +3305,9 @@ dependencies = [
 
 [[package]]
 name = "lru"
-version = "0.18.1"
+version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b6180140927ee907000b0aa540091f6ea512ead4447c92b8fc35bc72788a5a6"
+checksum = "5d2f2f9b4ba7e6b24d95e7e899329d35be83bcded72c8540cdd5368932d1d90a"
 dependencies = [
  "hashbrown 0.17.1",
 ]

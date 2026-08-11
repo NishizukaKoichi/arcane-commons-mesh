@@ -9,8 +9,9 @@ Exports use create-new mode, mode 0600, and refuse to overwrite. After catalog
 changes, the active kit is atomically refreshed with the vault ID, latest
 encrypted catalog CID/version, and owner public key. The CLI and
 desktop do not place passphrases in argv or environment; the desktop retains the
-unlocked passphrase in renderer memory for the active session. Community root
-authority export is not implemented in v0.1. The deterministic recovery test
+unlocked passphrase in renderer memory for the active session. Signed federation
+export moves portable community records to a named successor, but production key
+custody and legal authority transfer remain operator governance duties. The deterministic recovery test
 starts without identity or catalog cache, discovers the catalog from the
 encrypted kit pointer, retrieves catalog/manifest/chunks from child storage-node
 processes, and verifies AEAD, owner signature, domains, CIDs, lengths, and final

@@ -35,7 +35,12 @@ Research records form an ordered causal graph. Spells authorize only the named
 action, data scope, subject, budget, invocation count and time window.
 Capabilities bind a package/policy CID and a normalized 10,000-bps creator
 split. Execution attestations bind the capability, spell, runtime measurement,
-input CIDs and output CID. Pensive grants bind memory access to domain, purpose,
+input CIDs and output CID. Confidential-runtime evidence additionally binds a
+trusted issuer, provider, raw-quote CID, freshness nonce, measurement, execution
+and validity window. Settlement instructions bind the payer, capability,
+execution, exact allocations, currency, idempotency key and expiry; trusted
+operator receipts bind the rail, hashed external reference, status, exact amount
+and time. Pensive grants bind memory access to domain, purpose,
 read/write limits and time. Grimoire ratification counts distinct eligible
 signers. Legacy execution requires its time lock and distinct guardian
 threshold. Federation exports bind ordered items through a Merkle root and are

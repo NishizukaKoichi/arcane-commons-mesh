@@ -162,7 +162,7 @@ impl<W: D1AnchorWriter> AuditAnchorAdapter for D1Anchor<W> {
 
 /// Interface-only boundary for a possible future public-chain anchor.
 ///
-/// Implementations must not be wired to RPC, wallets, keys, or contracts in v0.1.
+/// This reference adapter must not be wired to RPC, wallets, keys, or contracts.
 pub trait FutureEvmAnchor {
     fn encode_anchor_call(&self, anchor: &AuditAnchor) -> Result<Vec<u8>, AuditError>;
 }

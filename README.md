@@ -10,10 +10,12 @@ The source is published under the [MIT License](LICENSE) so anyone may fork,
 modify, redistribute, or continue the project. Contributions and independent
 implementations are welcome. The protocol journey is complete and reproducible;
 this is a reference implementation rather than a hosted production service.
+Release changes are recorded in [CHANGELOG.md](CHANGELOG.md).
 
-This is not production-ready, fully decentralized, anonymous, or independently
-security-audited. Local execution attestations are not certified TEE evidence,
-and deterministic revenue allocation is not payment settlement. It has no
+This is implementation-complete as a reference and operator handoff, but it is
+not a hosted production service, fully decentralized, anonymous, or independently
+security-audited. Its signed adapter fixtures are not certified TEE evidence or
+proof that money moved. It has no
 cryptocurrency, transferable credit, wallet, or real blockchain connection.
 
 > **Do not use this as the only copy of valuable data.** The current three-node
@@ -47,6 +49,7 @@ pnpm test
 pnpm build
 pnpm verify:mvp
 pnpm verify:commons
+pnpm verify:handoff
 ```
 
 No external deployment, account, token, relay, or blockchain is required.
@@ -65,9 +68,10 @@ The connected Arcane Commons v1 protocol journey is exercised with:
 pnpm verify:commons
 ```
 
-It verifies eleven additional steps spanning signed Research Commons causal
+It verifies thirteen additional steps spanning signed Research Commons causal
 records, bounded Spell contracts, portable Capability Manifests and exact revenue
-splits, measured Compute-to-Data attestations, provenance-aware Pensive grants,
+splits, measured Compute-to-Data attestations, replaceable confidential-runtime
+evidence and idempotent settlement receipts, provenance-aware Pensive grants,
 quorum-confirmed Grimoire knowledge, time-locked multi-guardian Legacy directives,
 and signed federation export/import receipts. Evidence is written to
 `.verify/verify-commons-report.json`. The authenticated API persists only opaque
@@ -152,12 +156,23 @@ Its output is placed under `apps/site/dist/`. The site makes no network calls an
 does not imply that a signed public release or geographically independent mesh
 already exists.
 
-## Production work still needed
+## Adopt or continue the project
 
-The most useful next milestones are:
+Anyone can fork under the [MIT license](LICENSE). Start with the accountable
+[operator handoff](docs/OPERATOR_HANDOFF.md), [adapter contracts](docs/ADAPTER_CONTRACTS.md),
+[incident response runbook](docs/INCIDENT_RESPONSE.md), and
+[maintainer succession policy](MAINTAINERS.md). Proposed changes follow
+[CONTRIBUTING.md](CONTRIBUTING.md); private vulnerabilities follow
+[SECURITY.md](SECURITY.md). The
+[Operator adoption issue](.github/ISSUE_TEMPLATE/operator_adoption.yml) is a
+public, secret-free declaration of who owns each external responsibility.
+
+The software contracts and local journeys are complete. A real service still
+requires an adopter to:
 
 1. run nodes across independent machines, operators and regions;
-2. integrate and review real confidential-compute and chosen payment adapters;
+2. integrate and review real confidential-compute and chosen payment adapters
+   against the portable signed contracts;
 3. add a deliberately operated relay, monitoring and abuse response;
 4. sign, notarize and update desktop distributions;
 5. obtain independent cryptography, recovery and data-loss review;

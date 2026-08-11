@@ -17,7 +17,8 @@
 ## Required gates
 
 Run `pnpm lint`, `pnpm format:check`, `pnpm typecheck`, `pnpm test`,
-`pnpm test:integration`, `pnpm build`, and `pnpm verify:mvp`.
+`pnpm test:integration`, `pnpm build`, `pnpm verify:mvp`,
+`pnpm verify:commons`, and `pnpm verify:handoff`.
 Also run Rust fmt, clippy with warnings denied, tests, and build for the workspace.
 
 ## Security invariants
@@ -27,7 +28,8 @@ Also run Rust fmt, clippy with warnings denied, tests, and build for the workspa
   raw invite codes, tokens, plaintext file names, paths, or contents.
 - Cloudflare stores coordination metadata only, never user blobs or decryption keys.
 - Storage credit is integer, non-transferable, non-financial, and never voting weight.
-- No real blockchain, wallet, RPC, or contract in v0.1.
+- No real blockchain, wallet, RPC, merchant account, or provider trust root is
+  supplied by the reference implementation.
 - Never deploy, push, or create paid infrastructure without the current user's
   explicit authorization.
 - Storage nodes only access an explicitly selected root, reject traversal and links,
@@ -35,7 +37,7 @@ Also run Rust fmt, clippy with warnings denied, tests, and build for the workspa
 
 ## Definition of done
 
-All 25 acceptance criteria in `CODEX_MASTER_PROMPT.md` require evidence. All local
-gates must pass, documentation must match behavior, the working tree must be clean,
+All acceptance journeys require evidence. All local gates must pass,
+documentation must match behavior, the working tree must be clean,
 and an intentional local commit must exist. Do not claim production safety,
 complete decentralization, or independent security audit.

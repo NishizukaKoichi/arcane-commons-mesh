@@ -34,6 +34,8 @@ jobs:
         run: pnpm verify:mvp
       - name: Verify the Arcane Commons v1 protocol journey
         run: pnpm verify:commons
+      - name: Verify public operator handoff
+        run: pnpm verify:handoff
       - name: Upload non-secret diagnostic evidence on failure
         if: failure()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
