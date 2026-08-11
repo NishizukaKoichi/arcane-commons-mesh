@@ -70,6 +70,17 @@ describe("desktop safety flows", () => {
     expect(screen.getByRole("button", { name: "Community" })).toBeInTheDocument();
   });
 
+  it("walks through all Commons stages without claiming real payment or TEE", async () => {
+    const user = await finishOnboarding();
+    await user.click(screen.getByRole("button", { name: "Commons" }));
+    expect(screen.getByText(/秘密、原データ、復号鍵/)).toBeInTheDocument();
+    for (let index = 0; index < 8; index += 1) {
+      await user.click(screen.getByRole("button", { name: "この段階を確定" }));
+    }
+    expect(screen.getByText("8 / 8 構成済み")).toBeInTheDocument();
+    expect(screen.getByText(/本物のTEEや決済完了を示しません/)).toBeInTheDocument();
+  });
+
   it("detects an existing vault and lists retained files after restart", async () => {
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     invokeMock.mockImplementation((command: string) => {

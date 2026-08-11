@@ -24,12 +24,13 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
 
-type Page = "dashboard" | "vault" | "storage" | "community" | "recovery";
+type Page = "dashboard" | "commons" | "vault" | "storage" | "community" | "recovery";
 type Language = "ja" | "en";
 
 const labels = {
   ja: {
     dashboard: "概要",
+    commons: "Commons",
     vault: "保管庫",
     storage: "保存を提供",
     community: "共同体",
@@ -37,6 +38,7 @@ const labels = {
   },
   en: {
     dashboard: "Overview",
+    commons: "Commons",
     vault: "Vault",
     storage: "Provide storage",
     community: "Community",
@@ -155,13 +157,15 @@ export function App() {
     );
   }
 
-  const nav = (["dashboard", "vault", "storage", "community", "recovery"] as Page[]).map(
+  const nav = (["dashboard", "commons", "vault", "storage", "community", "recovery"] as Page[]).map(
     (item) => ({
       id: item,
       label: labels[language][item],
       icon:
         item === "dashboard"
           ? CircleGauge
+          : item === "commons"
+            ? Boxes
           : item === "vault"
             ? FileLock2
             : item === "storage"
@@ -243,6 +247,7 @@ export function App() {
         </header>
         <div className="page-enter" key={page}>
           {page === "dashboard" && <Dashboard files={files} mesh={mesh} onNavigate={setPage} />}
+          {page === "commons" && <CommonsWorkspace />}
           {page === "vault" && (
             <Vault
               files={files}
@@ -647,6 +652,63 @@ function Community() {
           <SectionHeading title="提案と投票" link="提案を作る" />
           <div className="proposal"><div className="proposal-icon"><Vote size={20} /></div><div><strong>投票データはありません</strong><span>共同体へ接続すると提案を取得します。</span></div></div>
           <p className="governance-note">保存容量や共有容量によって、投票の重みは変わりません。</p>
+        </section>
+      </div>
+    </section>
+  );
+}
+
+const commonsStages = [
+  ["Research", "仮説・データ・失敗を署名付き因果記録へ"],
+  ["Spell", "読む範囲・対象・予算・回数・承認・期限を限定"],
+  ["Capability", "原本を渡さず、一回の能力と分配条件を公開"],
+  ["Compute", "承認されたruntimeと入出力CIDを実行証明へ"],
+  ["Pensive", "結果を来歴・確信度・目的別grant付きで記憶"],
+  ["Grimoire", "理由・例外・貢献者を複数署名で共同体知識へ"],
+  ["Legacy", "待機期間と複数guardianで継承条件を確定"],
+  ["Export", "全記録を署名bundleとして別Commonsへ移行"]
+] as const;
+
+function CommonsWorkspace() {
+  const [stage, setStage] = useState(0);
+  const [project, setProject] = useState("研究データの安全な分析");
+  const complete = stage === commonsStages.length;
+  const current = commonsStages[Math.min(stage, commonsStages.length - 1)]!;
+  return (
+    <section className="content commons-workspace">
+      <PageTitle
+        eyebrow="Arcane Commons v1 / local reference"
+        title="能力を渡さず、結果を共有する"
+        action={<span className={complete ? "commons-proof is-complete" : "commons-proof"}><ShieldCheck size={16} />{complete ? "8 / 8 構成済み" : `${stage} / 8 構成済み`}</span>}
+      />
+      <p className="commons-intro">公開プロトコルの一連の流れを、この端末だけで組み立てます。秘密、原データ、復号鍵、内部思考は市場へ渡しません。</p>
+      <div className="commons-layout">
+        <ol className="commons-stages" aria-label="Commonsの段階">
+          {commonsStages.map(([name, description], index) => (
+            <li className={index < stage ? "is-done" : index === stage ? "is-current" : ""} key={name}>
+              <span>{index < stage ? <Check size={14} /> : String(index + 1).padStart(2, "0")}</span>
+              <div><strong>{name}</strong><small>{description}</small></div>
+            </li>
+          ))}
+        </ol>
+        <section className="commons-editor" aria-live="polite">
+          {!complete ? (
+            <>
+              <p className="eyebrow">現在の操作 · {current[0]}</p>
+              <h2>{current[1]}</h2>
+              <label>プロジェクト名<input value={project} onChange={(event) => setProject(event.target.value)} /></label>
+              <div className="commons-boundary"><LockKeyhole size={19} /><div><strong>端末外へ出るもの</strong><span>暗号化envelopeのCID、限定条件、署名、監査時刻だけ</span></div></div>
+              <button className="primary-action" disabled={!project.trim()} onClick={() => setStage((value) => Math.min(value + 1, commonsStages.length))}>この段階を確定 <ChevronRight size={17} /></button>
+            </>
+          ) : (
+            <div className="commons-complete">
+              <ShieldCheck size={36} />
+              <p className="eyebrow">Local composition complete</p>
+              <h2>移行可能な一連の記録が揃いました。</h2>
+              <p>CLIの`verify:commons`が署名、CID、権限、分配、quorum、Legacy、export/importを独立に検証します。この画面は操作構成であり、本物のTEEや決済完了を示しません。</p>
+              <button className="secondary-action" onClick={() => setStage(0)}>最初から確認</button>
+            </div>
+          )}
         </section>
       </div>
     </section>

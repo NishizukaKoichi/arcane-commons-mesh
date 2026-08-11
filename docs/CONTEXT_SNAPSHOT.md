@@ -76,3 +76,11 @@ cross-community, duplicate, CID-mismatched, and forged publications; coordinator
 storage receives neither plaintext nor decryption keys. Migration `0004` and
 OpenAPI routes make this persistence reproducible. Desktop authoring and the
 real confidential-compute/payment adapter boundaries remain next.
+
+The desktop now includes a restrained Commons workspace that walks through the
+eight owner-visible stages from Research to signed export. It keeps the encrypted
+boundary visible and explicitly distinguishes local protocol composition from a
+real TEE or completed payment. Desktop tests exercise all eight stages; Playwright
+verified the completed journey at desktop and mobile widths with no console error
+or Vite overlay. Native persistence and API publication from this workspace are
+still required before v1 completion.
