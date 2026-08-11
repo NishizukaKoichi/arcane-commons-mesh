@@ -81,6 +81,37 @@ describe("desktop safety flows", () => {
     expect(screen.getByText(/本物のTEEや決済完了を示しません/)).toBeInTheDocument();
   });
 
+  it("reloads an encrypted Commons workspace and exports its signed envelope in Tauri", async () => {
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "desktop_status") return Promise.resolve({ hasVault: true });
+      if (command === "gc_vault") return Promise.resolve(0);
+      if (command === "list_vault_files") return Promise.resolve([]);
+      if (command === "local_mesh_status") {
+        return Promise.resolve({ connected: false, healthyNodes: 0, totalNodes: 3 });
+      }
+      if (command === "load_commons_workspace") {
+        return Promise.resolve({ project: "保存済み研究", stage: 8 });
+      }
+      if (command === "export_commons_workspace") {
+        return Promise.resolve({ path: "/tmp/export.acm-commons.json", envelopeCid: "abc" });
+      }
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("既存の保管庫");
+    await user.type(screen.getByLabelText("パスフレーズ"), "very long recovery phrase");
+    await user.click(screen.getByRole("button", { name: "保管庫を開く" }));
+    await user.click(screen.getByRole("button", { name: "Commons" }));
+    expect(await screen.findByText("8 / 8 構成済み")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "署名済み記録を書き出す" }));
+    expect(await screen.findByText(/export\.acm-commons\.json/)).toBeInTheDocument();
+    expect(invokeMock).toHaveBeenCalledWith("load_commons_workspace", {
+      passphrase: "very long recovery phrase"
+    });
+  });
+
   it("detects an existing vault and lists retained files after restart", async () => {
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     invokeMock.mockImplementation((command: string) => {

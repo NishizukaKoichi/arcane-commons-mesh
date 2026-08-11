@@ -10,11 +10,13 @@ const facts = [
   ["共有容量", "整数milli_gib_hour、非譲渡、非金融"],
   ["統治", "active membership一件につき一票"],
   ["復旧", "Argon2idで暗号化された.acm-recovery"]
+  ,["Commons", "Research / Spell / Capability / Compute / Pensive / Grimoire / Legacy / Export"]
+  ,["公開artifact", "XChaCha20暗号文CID + Ed25519 owner署名"]
 ];
 ---
-<Base title="公開仕様 — 魔法網" description="Arcane Commons Mesh v0.1の暗号、保存、調整、復旧、共有容量の公開仕様。">
+<Base title="公開仕様 — 魔法網" description="Arcane Commons v1の暗号、保存、研究、能力、記憶、知識、継承、移行の公開仕様。">
   <section class="document-hero">
-    <p class="eyebrow">Public specification / v0.1</p>
+    <p class="eyebrow">Public specification / v1</p>
     <h1>交換できる境界を、<br />先に公開する。</h1>
     <p>保存形式、復旧形式、調整API、通信操作を公開し、ひとつの運営者や事業者だけが読める仕組みにしません。</p>
   </section>
@@ -26,5 +28,7 @@ const facts = [
     <article><p class="eyebrow">保存</p><h2>暗号化blobだけ</h2><p>保存拠点は専用root以外へ触れず、path traversalとsymlinkを拒否し、CID検証後にatomic renameします。</p></article>
     <article><p class="eyebrow">調整</p><h2>名簿と交通整理</h2><p>D1は会員、ノード、CID、配置、task、整数credit、投票、監査hashだけを保持します。R2は必須ではありません。</p></article>
     <article><p class="eyebrow">移行</p><h2>versioned snapshot</h2><p>公開鍵、資格情報、証明書、catalog pointer、監査chain、方針、投票を持ち出せます。ファイル本体と秘密鍵は含めません。</p></article>
+    <article><p class="eyebrow">能力</p><h2>原本ではなく限定実行</h2><p>Spellで対象、範囲、予算、回数、承認、期限を限定し、Capabilityと実行証明を署名します。local証明は実TEE認証ではありません。</p></article>
+    <article><p class="eyebrow">知識</p><h2>失敗も理由も残す</h2><p>Researchの因果関係、Pensiveの来歴、Grimoireの理由・例外・複数ratifier、Legacyのguardian条件を検証できます。</p></article>
   </section>
 </Base>

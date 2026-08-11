@@ -6,7 +6,7 @@ use arcane_mesh_core::{
         CatalogFileVersion, FileManifest, SignedVaultCatalog, VaultCatalog,
     },
     cid,
-    crypto::{decrypt, SecretKey},
+    crypto::{decrypt, encrypt, Envelope, SecretKey},
     identity::{Identity, MembershipClaims, NodeCertificateClaims},
     recovery::{export, import, RecoveryPayload, RecoveryVaultPointer},
     store::ObjectStore,
@@ -16,6 +16,7 @@ use arcane_mesh_protocol::{
     transport::{IrohTransport, WireFrame},
     LocalNodeEndpoint, Operation, Request,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -186,6 +187,127 @@ struct DesktopFile {
 struct DesktopRestore {
     path: String,
     bytes: u64,
+}
+
+const COMMONS_WORKSPACE_AAD: &[u8] = b"acm.desktop.commons-workspace.v1";
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CommonsWorkspaceState {
+    project: String,
+    stage: u8,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CommonsWorkspaceExport {
+    community_id: String,
+    artifact_id: String,
+    kind: &'static str,
+    envelope_cid: String,
+    encrypted_envelope_base64: String,
+    created_at: i64,
+    owner_public_key: String,
+    owner_signature: String,
+    path: String,
+}
+
+#[tauri::command]
+fn save_commons_workspace(
+    app: tauri::AppHandle,
+    passphrase: String,
+    project: String,
+    stage: u8,
+) -> Result<CommonsWorkspaceState, String> {
+    if project.trim().is_empty() || project.chars().count() > 200 || stage > 8 {
+        return Err("Commonsのプロジェクト名または進捗が不正です".into());
+    }
+    let state = CommonsWorkspaceState { project, stage };
+    let data_dir = desktop_data_dir(&app).map_err(|error| error.to_string())?;
+    fs::create_dir_all(&data_dir).map_err(|error| error.to_string())?;
+    let (_, master) = load_stronghold_secrets(&data_dir, &passphrase)
+        .map_err(|_| "保管庫を開けません。復旧パスフレーズを確認してください".to_string())?;
+    let key = SecretKey(master).derive("acm.desktop.commons-workspace.key.v1");
+    let plaintext = serde_json::to_vec(&state).map_err(|error| error.to_string())?;
+    let envelope =
+        encrypt(&key, &plaintext, COMMONS_WORKSPACE_AAD).map_err(|error| error.to_string())?;
+    write_private_replace(
+        &data_dir.join("commons-workspace.envelope.json"),
+        &serde_json::to_vec(&envelope).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(state)
+}
+
+#[tauri::command]
+fn load_commons_workspace(
+    app: tauri::AppHandle,
+    passphrase: String,
+) -> Result<Option<CommonsWorkspaceState>, String> {
+    let data_dir = desktop_data_dir(&app).map_err(|error| error.to_string())?;
+    let path = data_dir.join("commons-workspace.envelope.json");
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let (_, master) = load_stronghold_secrets(&data_dir, &passphrase)
+        .map_err(|_| "保管庫を開けません。復旧パスフレーズを確認してください".to_string())?;
+    let envelope: Envelope =
+        serde_json::from_slice(&fs::read(path).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+    let key = SecretKey(master).derive("acm.desktop.commons-workspace.key.v1");
+    let plaintext = decrypt(&key, &envelope, COMMONS_WORKSPACE_AAD)
+        .map_err(|_| "Commons記録を復号できません".to_string())?;
+    let state: CommonsWorkspaceState =
+        serde_json::from_slice(&plaintext).map_err(|error| error.to_string())?;
+    if state.stage > 8 || state.project.trim().is_empty() {
+        return Err("Commons記録が不正です".into());
+    }
+    Ok(Some(state))
+}
+
+#[tauri::command]
+fn export_commons_workspace(
+    app: tauri::AppHandle,
+    passphrase: String,
+) -> Result<CommonsWorkspaceExport, String> {
+    let data_dir = desktop_data_dir(&app).map_err(|error| error.to_string())?;
+    let envelope_bytes = fs::read(data_dir.join("commons-workspace.envelope.json"))
+        .map_err(|_| "先にCommonsの段階を確定してください".to_string())?;
+    let (identity_seed, _) = load_stronghold_secrets(&data_dir, &passphrase)
+        .map_err(|_| "保管庫を開けません。復旧パスフレーズを確認してください".to_string())?;
+    let community_id = load_local_mesh_profile(&data_dir)
+        .map_err(|error| error.to_string())?
+        .map(|profile| profile.community_id)
+        .unwrap_or_else(|| "community-unassigned".into());
+    let envelope_cid = cid(&envelope_bytes);
+    let artifact_id = format!("exp_{envelope_cid}");
+    let created_at = unix_now().map_err(|error| error.to_string())?;
+    let identity = Identity::from_seed(identity_seed);
+    let message = format!(
+        "acm.commons-artifact.v1|{community_id}|{artifact_id}|federation_export|{envelope_cid}|{created_at}"
+    );
+    let download = app
+        .path()
+        .download_dir()
+        .map_err(|error| error.to_string())?;
+    let path = download.join(format!("Arcane-Commons-{created_at}.acm-commons.json"));
+    let exported = CommonsWorkspaceExport {
+        community_id,
+        artifact_id,
+        kind: "federation_export",
+        envelope_cid,
+        encrypted_envelope_base64: URL_SAFE_NO_PAD.encode(&envelope_bytes),
+        created_at,
+        owner_public_key: URL_SAFE_NO_PAD.encode(identity.public_key()),
+        owner_signature: URL_SAFE_NO_PAD.encode(identity.sign(message.as_bytes())),
+        path: path.display().to_string(),
+    };
+    write_private_new(
+        &path,
+        &serde_json::to_vec_pretty(&exported).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(exported)
 }
 
 #[derive(Deserialize, Serialize)]
@@ -373,6 +495,9 @@ pub fn run() {
             restore_vault_file,
             delete_vault_file,
             gc_vault,
+            save_commons_workspace,
+            load_commons_workspace,
+            export_commons_workspace,
             configure_storage,
             connect_local_mesh,
             local_mesh_status
@@ -427,6 +552,25 @@ fn write_private_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut file = options.open(path)?;
     file.write_all(bytes)?;
     file.sync_all()
+}
+
+fn write_private_replace(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let temporary = path.with_extension("partial");
+    let mut options = OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temporary)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    fs::rename(&temporary, path)?;
+    if let Some(parent) = path.parent() {
+        fs::File::open(parent)?.sync_all()?;
+    }
+    Ok(())
 }
 
 fn replace_recovery(

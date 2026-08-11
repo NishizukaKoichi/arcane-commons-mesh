@@ -43,8 +43,10 @@ workstation or uploaded by hand.
 
 After publication, verify all four platform archives and checksum files are
 present, inspect the workflow result, download one archive on a clean machine,
-verify its checksum, and run `acmctl doctor`. A release is not a security audit
-and must retain the warning that v0.1 is not the only safe copy of valuable data.
+verify its checksum, run `acmctl doctor`, and run `acmctl verify-commons` from a
+writable directory. A release is not a security audit and must retain the
+warning that v1 is not the only safe copy of valuable data and does not prove a
+production TEE or payment settlement.
 
 ## Rollback
 

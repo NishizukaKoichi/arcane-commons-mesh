@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Arcane Commons Mesh Control Plane
-  version: 0.1.0
+  version: 1.0.0
   description: Coordination metadata only. File bodies, plaintext names, paths, and keys are forbidden.
 servers:
   - url: http://127.0.0.1:8787

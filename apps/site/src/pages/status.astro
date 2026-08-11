@@ -11,20 +11,23 @@ const implemented = [
   "TauriデスクトップとStronghold",
   "署名・認証付きWorker/D1永続化、OpenAPI、15段階ローカル検証",
   "macOS・Linux・Windows CLIのGitHub Releases自動配布とSHA-256"
+  ,"ResearchからExportまでの署名付き11段階プロトコル検証"
+  ,"暗号化Commons artifact APIと8段階デスクトップjourney"
 ];
 const pending = [
   "独立した複数端末・複数地域での長期運用",
   "第三者による暗号・実装セキュリティ監査",
   "本番Cloudflare環境と自己ホストrelay",
   "OSコード署名・notarize・自動更新を備えたデスクトップ公開配布"
+  ,"実TEE vendor証明と選択した決済railの本番adapter"
 ];
 ---
-<Base title="実装状態 — 魔法網" description="Arcane Commons Mesh v0.1の実装済み機能、未完了項目、既知制約。">
+<Base title="実装状態 — 魔法網" description="Arcane Commons v1の実装済み機能、未完了項目、既知制約。">
   <section class="document-hero status-hero">
-    <p class="eyebrow">System status / local MVP</p>
+    <p class="eyebrow">System status / v1 local reference</p>
     <h1>ローカル検証は成功。<br />本番運用はまだ。</h1>
     <p>現在の状態を誇張せず公開します。三つの保存プロセスは一台の中で検証しており、地理的な障害独立性を証明するものではありません。</p>
-    <span class="status-label"><i></i> 15 / 15 ローカル検証成功</span>
+    <span class="status-label"><i></i> Storage 15 / 15 · Commons 11 / 11 成功</span>
   </section>
   <section class="status-columns">
     <div><p class="eyebrow">実装済み</p><ul>{implemented.map((item) => <li><i>✓</i>{item}</li>)}</ul></div>

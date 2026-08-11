@@ -1,5 +1,16 @@
 # Context snapshot
 
+## v1 completion update — 2026-08-11
+
+The signed Research, Spell, Capability, Compute, Pensive, Grimoire, Legacy and
+Federation primitives now form one eleven-step CLI verification. Worker/D1
+persists authenticated encrypted Commons artifacts. The desktop composes all
+eight user-facing domains and uses the existing Stronghold vault secret for
+encrypted save/reload and signed API-compatible export. CI executes both the
+fifteen-step storage proof and eleven-step Commons proof. Real TEE vendor
+evidence, payment settlement, geographic redundancy and independent audit remain
+deployment work and are not claimed by v1.
+
 - Date: 2026-08-11
 - Scope: publicly downloadable v0.1 CLI distribution and verifiable handoff
 - Canonical repo: resolved Git checkout, `main`

@@ -247,7 +247,9 @@ export function App() {
         </header>
         <div className="page-enter" key={page}>
           {page === "dashboard" && <Dashboard files={files} mesh={mesh} onNavigate={setPage} />}
-          {page === "commons" && <CommonsWorkspace />}
+          {page === "commons" && (
+            <CommonsWorkspace passphrase={sessionPassphrase} onNotice={setNotice} />
+          )}
           {page === "vault" && (
             <Vault
               files={files}
@@ -669,9 +671,29 @@ const commonsStages = [
   ["Export", "全記録を署名bundleとして別Commonsへ移行"]
 ] as const;
 
-function CommonsWorkspace() {
+type CommonsWorkspaceState = { project: string; stage: number };
+
+function CommonsWorkspace({
+  passphrase,
+  onNotice
+}: {
+  passphrase: string;
+  onNotice: (notice: string) => void;
+}) {
   const [stage, setStage] = useState(0);
   const [project, setProject] = useState("研究データの安全な分析");
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    if (!isTauri() || !passphrase) return;
+    void invoke<CommonsWorkspaceState | null>("load_commons_workspace", { passphrase })
+      .then((saved) => {
+        if (saved) {
+          setProject(saved.project);
+          setStage(saved.stage);
+        }
+      })
+      .catch((reason) => onNotice(String(reason)));
+  }, [passphrase, onNotice]);
   const complete = stage === commonsStages.length;
   const current = commonsStages[Math.min(stage, commonsStages.length - 1)]!;
   return (
@@ -698,7 +720,22 @@ function CommonsWorkspace() {
               <h2>{current[1]}</h2>
               <label>プロジェクト名<input value={project} onChange={(event) => setProject(event.target.value)} /></label>
               <div className="commons-boundary"><LockKeyhole size={19} /><div><strong>端末外へ出るもの</strong><span>暗号化envelopeのCID、限定条件、署名、監査時刻だけ</span></div></div>
-              <button className="primary-action" disabled={!project.trim()} onClick={() => setStage((value) => Math.min(value + 1, commonsStages.length))}>この段階を確定 <ChevronRight size={17} /></button>
+              <button className="primary-action" disabled={!project.trim() || saving} onClick={() => {
+                const nextStage = Math.min(stage + 1, commonsStages.length);
+                if (!isTauri()) {
+                  setStage(nextStage);
+                  return;
+                }
+                setSaving(true);
+                void invoke<CommonsWorkspaceState>("save_commons_workspace", {
+                  passphrase,
+                  project,
+                  stage: nextStage
+                })
+                  .then((saved) => setStage(saved.stage))
+                  .catch((reason) => onNotice(String(reason)))
+                  .finally(() => setSaving(false));
+              }}>{saving ? "暗号化して保存中…" : "この段階を確定"} <ChevronRight size={17} /></button>
             </>
           ) : (
             <div className="commons-complete">
@@ -706,6 +743,15 @@ function CommonsWorkspace() {
               <p className="eyebrow">Local composition complete</p>
               <h2>移行可能な一連の記録が揃いました。</h2>
               <p>CLIの`verify:commons`が署名、CID、権限、分配、quorum、Legacy、export/importを独立に検証します。この画面は操作構成であり、本物のTEEや決済完了を示しません。</p>
+              <button className="primary-action" onClick={() => {
+                if (!isTauri()) {
+                  onNotice("ブラウザ表示では暗号化記録を書き出しません");
+                  return;
+                }
+                void invoke<{ path: string; envelopeCid: string }>("export_commons_workspace", { passphrase })
+                  .then((result) => onNotice(`署名済みCommons記録: ${result.path} · CID ${result.envelopeCid}`))
+                  .catch((reason) => onNotice(String(reason)));
+              }}>署名済み記録を書き出す</button>
               <button className="secondary-action" onClick={() => setStage(0)}>最初から確認</button>
             </div>
           )}

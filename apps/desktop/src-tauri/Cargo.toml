@@ -16,6 +16,7 @@ tauri-build = { version = "2.6.3", features = [] }
 anyhow.workspace = true
 arcane-mesh-core = { path = "../../../crates/mesh-core" }
 arcane-mesh-protocol = { path = "../../../crates/mesh-protocol" }
+base64.workspace = true
 blake3.workspace = true
 rand_core.workspace = true
 serde.workspace = true

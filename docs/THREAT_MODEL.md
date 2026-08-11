@@ -1,6 +1,6 @@
 # Threat model
 
-Status: locally verified, unaudited v0.1 MVP. It is not approved for the only
+Status: locally verified, unaudited v1 reference implementation. It is not approved for the only
 copy of valuable data.
 
 | Threat | Required control | Current status |

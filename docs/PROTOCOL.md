@@ -27,3 +27,21 @@ Every wire frame includes the signed membership credential and a member-signed
 node certificate. The receiver binds that certificate's separate endpoint public
 key to the authenticated iroh connection before accepting the frame. Frame size,
 credential scope, lifetime, role, and object CID are then validated fail-closed.
+
+## Commons records
+
+Commons v1 records are domain-separated Ed25519-signed canonical structures.
+Research records form an ordered causal graph. Spells authorize only the named
+action, data scope, subject, budget, invocation count and time window.
+Capabilities bind a package/policy CID and a normalized 10,000-bps creator
+split. Execution attestations bind the capability, spell, runtime measurement,
+input CIDs and output CID. Pensive grants bind memory access to domain, purpose,
+read/write limits and time. Grimoire ratification counts distinct eligible
+signers. Legacy execution requires its time lock and distinct guardian
+threshold. Federation exports bind ordered items through a Merkle root and are
+accepted with a signed destination receipt.
+
+The API publication envelope is signed over
+`acm.commons-artifact.v1|communityId|artifactId|kind|envelopeCid|createdAt`.
+The coordinator verifies that signature and BLAKE3 CID but cannot decrypt the
+envelope.

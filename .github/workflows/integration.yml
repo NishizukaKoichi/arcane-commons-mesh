@@ -32,11 +32,20 @@ jobs:
         run: pnpm --filter @arcane-commons/api test:d1
       - name: Run isolated three-node verification
         run: pnpm verify:mvp
+      - name: Verify the Arcane Commons v1 protocol journey
+        run: pnpm verify:commons
       - name: Upload non-secret diagnostic evidence on failure
         if: failure()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: verify-mvp-diagnostics
           path: .verify/verify-mvp-report.json
+          if-no-files-found: warn
+          retention-days: 7
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: failure()
+        with:
+          name: verify-commons-diagnostics
+          path: .verify/verify-commons-report.json
           if-no-files-found: warn
           retention-days: 7

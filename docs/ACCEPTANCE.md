@@ -1,18 +1,26 @@
-# v0.1 acceptance evidence
+# Arcane Commons v1 acceptance evidence
 
-| ID | Condition | Evidence |
-|---:|---|---|
-| 1 | Canonical Git checkout | resolved working directory and Git-root checks |
-| 2–9 | all quality/build gates | root package scripts and CI |
-| 10–13 | MVP, replicas, outage, corruption | `verify:mvp` steps 3–8 over authenticated iroh/QUIC child-node endpoints |
-| 14 | clean Recovery Kit recovery | step 13: kit identity/key → control-plane latest pointer → QUIC process-node catalog → manifest → chunks; stale-kit recovery remains valid after GC |
-| 15–17 | no control-plane plaintext/key access | actual local D1 files plus in-memory/process-node storage scans |
-| 18–20 | no transfer; equal voting | API route and duplicate-vote tests |
-| 21 | no live blockchain | interface/mock source test and source scan |
-| 22 | no committed secrets | tracked-file secret scan |
-| 23 | no external deployment | local-only verification |
-| 24 | honest threat model | `docs/THREAT_MODEL.md` |
-| 25 | reproducible demo | README demo and verification commands |
+v1 is accepted only when both executable journeys pass. `pnpm verify:mvp`
+proves the encrypted cooperative storage foundation in fifteen steps;
+`pnpm verify:commons` proves the Commons protocol journey in eleven steps.
 
-The final gate run records command results and the exact local commit. Passing
-these local tests is not an independent security audit.
+| Boundary | Executable evidence |
+|---|---|
+| owner-held identity, encryption and recovery | encrypted vault, Stronghold desktop secrets, clean Recovery Kit restore |
+| Research Commons | signed causal records, parent ordering, correction/retraction targets |
+| Spell Commons | data/action/subject/amount/invocation/approval/reversibility/time limits |
+| Capability Exchange | signed portable manifests and exact 10,000-bps revenue allocation |
+| Compute-to-Data | runtime measurement allow-list and attested input/output CIDs |
+| Pensive | provenance, confidence, supersession and purpose-bounded read/write grants |
+| Grimoire Commons | rationale/alternatives/exceptions and distinct independent ratifier quorum |
+| Legacy | time lock and distinct guardian threshold |
+| federation and exit | ordered Merkle export bundle and signed target receipt |
+| API persistence | authenticated, community-scoped, CID-checked opaque encrypted artifacts in D1 |
+| desktop journey | eight-stage composition, encrypted save/reload, signed portable export |
+| storage resilience | three process nodes, outage restore, corruption rejection/repair, plaintext scans |
+| governance | one active member, one vote; storage or money does not add governance weight |
+
+The root lint, format, typecheck, test and build commands, both verification
+commands, dependency audits, GitHub CI and release checksums form the release
+gate. Passing them is reproducible engineering evidence, not an independent
+security audit, production TEE certification or proof of completed payment.

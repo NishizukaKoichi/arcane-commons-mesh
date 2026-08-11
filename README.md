@@ -1,18 +1,20 @@
 # Arcane Commons Mesh / 魔法網
 
-Arcane Commons Mesh v0.1 is a local, independently verifiable MVP for a
-members-only cooperative backup mesh. It encrypts data before storage, places
-ciphertext on three local storage-node processes, restores through an outage,
-rejects corruption, and recovers from an encrypted recovery file.
+Arcane Commons v1 is a public, independently verifiable reference
+implementation for sovereign data, durable community knowledge and attributable
+creator reward. It combines an encrypted cooperative storage mesh with signed
+Research, Spell, Capability, Compute-to-Data, Pensive, Grimoire, Legacy and
+federation/export protocols.
 
 The source is published under the [MIT License](LICENSE) so anyone may fork,
-modify, redistribute, or continue the project. Contributions are welcome, but
-this repository is currently a research/development handoff—not a finished
-backup product.
+modify, redistribute, or continue the project. Contributions and independent
+implementations are welcome. The protocol journey is complete and reproducible;
+this is a reference implementation rather than a hosted production service.
 
 This is not production-ready, fully decentralized, anonymous, or independently
-security-audited. It has no cryptocurrency, transferable credit, wallet, or real
-blockchain connection.
+security-audited. Local execution attestations are not certified TEE evidence,
+and deterministic revenue allocation is not payment settlement. It has no
+cryptocurrency, transferable credit, wallet, or real blockchain connection.
 
 > **Do not use this as the only copy of valuable data.** The current three-node
 > demo runs on one computer and does not survive loss of that computer.
@@ -44,6 +46,7 @@ pnpm typecheck
 pnpm test
 pnpm build
 pnpm verify:mvp
+pnpm verify:commons
 ```
 
 No external deployment, account, token, relay, or blockchain is required.
@@ -56,7 +59,7 @@ consumption, forbidden financial-route checks, one-member-one-vote, clean
 Recovery Kit restore, plaintext absence checks, and audit-chain/Merkle
 verification. Evidence is written to `.verify/verify-mvp-report.json`.
 
-The in-progress Arcane Commons v1 protocol slice can be exercised with:
+The connected Arcane Commons v1 protocol journey is exercised with:
 
 ```sh
 pnpm verify:commons
@@ -67,9 +70,10 @@ records, bounded Spell contracts, portable Capability Manifests and exact revenu
 splits, measured Compute-to-Data attestations, provenance-aware Pensive grants,
 quorum-confirmed Grimoire knowledge, time-locked multi-guardian Legacy directives,
 and signed federation export/import receipts. Evidence is written to
-`.verify/verify-commons-report.json`. These protocol primitives are implemented;
-the complete persistent product journeys and UI/API integration remain in progress
-and are not part of the v0.1.0 completion claim.
+`.verify/verify-commons-report.json`. The authenticated API persists only opaque
+encrypted Commons envelopes; the desktop saves and reloads its eight-stage
+workspace under a Stronghold-held key and exports an API-compatible signed
+artifact.
 
 ## Run the local demo
 
@@ -122,14 +126,18 @@ pnpm --filter @arcane-commons/desktop tauri build --no-bundle
 ```
 
 The current development binary is placed under `target/release/`. GitHub Releases
-currently distribute the CLI, not the unsigned Tauri desktop application.
+distribute the cross-platform verification CLI, not the unsigned Tauri desktop
+application.
 Onboarding writes an encrypted Recovery Kit to Downloads and stores identity/vault
 keys in a Stronghold snapshot. After `pnpm demo:up`, the desktop can discover the local
 demo from the active clone and send encrypted catalogs, manifests, and chunks to
 three separate loopback QUIC storage-node processes. It verifies replica health
 and restores from a healthy CID-verified copy. Without that connection it uses
 app-local object stores. Neither mode is geographic redundancy.
-The onboarding screen can import a Kit from explicitly supplied storage-node
+The Commons screen composes Research through Export, saves only an encrypted
+envelope, reloads it after restart and writes a signed portable artifact. It
+does not claim that a real TEE ran or that a payment settled. The onboarding
+screen can import a Kit from explicitly supplied storage-node
 folders; automatic remote-node discovery is not part of this local artifact.
 It is an unaudited
 development artifact and must not be treated as the only copy of valuable data.
@@ -144,16 +152,15 @@ Its output is placed under `apps/site/dist/`. The site makes no network calls an
 does not imply that a signed public release or geographically independent mesh
 already exists.
 
-## What help is needed
+## Production work still needed
 
 The most useful next milestones are:
 
-1. replace deterministic demo enrollment with secure invitation and membership
-   issuance;
-2. build and verify a Windows storage-node and desktop distribution;
-3. add LAN discovery, then test direct connections between separate machines;
-4. add an explicitly operated encrypted relay path for different networks;
-5. obtain an independent cryptography, recovery, and data-loss review;
+1. run nodes across independent machines, operators and regions;
+2. integrate and review real confidential-compute and chosen payment adapters;
+3. add a deliberately operated relay, monitoring and abuse response;
+4. sign, notarize and update desktop distributions;
+5. obtain independent cryptography, recovery and data-loss review;
 6. prove recovery after the original owner computer is unavailable.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), the

@@ -1,10 +1,12 @@
-# Roadmap
+# Roadmap after v1
 
-After the local v0.1 proof: five-node manifest/catalog placement, independent
-machines and failure domains, self-hosted relay, authority rotation and guardian
-recovery, Windows/Linux packaging, stronger retrievability proofs, external
-security audit, and a reviewed control-plane migration exercise.
+The public v1 reference journey is implemented. Production deployments still
+need independently operated machines and regions, a reviewed relay, authority
+rotation and guardian operations, real confidential-compute adapters with
+vendor evidence, chosen payment-rail adapters, observability, abuse response,
+desktop code signing/notarization/updates and an independent cryptography and
+recovery audit.
 
-Explicitly excluded from v0.1: cryptocurrency, transferable tokens, wallets,
-smart contracts, real EVM connections, mobile apps, compute sharing, Byzantine
-consensus, erasure coding, cross-user deduplication, and public sharing links.
+Those integrations are deliberately not simulated as completed. Each should be
+introduced behind the published adapter boundary with test vectors, rollback
+instructions and a deployment-specific threat model.

@@ -1,6 +1,6 @@
 {
   "name": "arcane-commons-mesh",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "packageManager": "pnpm@10.13.1",
   "devDependencies": {
