@@ -62,13 +62,14 @@ The in-progress Arcane Commons v1 protocol slice can be exercised with:
 pnpm verify:commons
 ```
 
-It verifies nine additional steps spanning signed Research Commons causal
+It verifies eleven additional steps spanning signed Research Commons causal
 records, bounded Spell contracts, portable Capability Manifests and exact revenue
 splits, measured Compute-to-Data attestations, provenance-aware Pensive grants,
-and time-locked multi-guardian Legacy directives. Evidence is written to
+quorum-confirmed Grimoire knowledge, time-locked multi-guardian Legacy directives,
+and signed federation export/import receipts. Evidence is written to
 `.verify/verify-commons-report.json`. These protocol primitives are implemented;
-the complete v1 product journeys, federation/export, Grimoire workflow, and UI/API
-integration remain in progress and are not part of the v0.1.0 completion claim.
+the complete persistent product journeys and UI/API integration remain in progress
+and are not part of the v0.1.0 completion claim.
 
 ## Run the local demo
 

@@ -65,6 +65,7 @@ multi-guardian Legacy directives. `pnpm verify:commons` exercises nine connected
 steps and writes machine-readable evidence.
 
 This is an intentionally committed intermediate boundary, not a v1 completion
-claim. Grimoire confirmation, federation and full export, persistent API/UI
-journeys, real payment adapters, real confidential-compute attestation, integrated
-Mesh storage, and end-to-end release verification remain required.
+claim. Grimoire quorum confirmation and signed federation export/import are now
+implemented at the protocol layer. Persistent API/UI journeys, real payment
+adapters, real confidential-compute attestation, integrated Mesh storage, and
+end-to-end release verification remain required.

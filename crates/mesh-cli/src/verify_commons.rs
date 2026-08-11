@@ -2,6 +2,8 @@ use anyhow::{ensure, Context, Result};
 use arcane_mesh_core::{
     capability::{CapabilityManifest, OfferingKind, RevenueSplit},
     compute::ExecutionAttestation,
+    federation::{ExportItem, FederationBundle, MigrationReceipt},
+    grimoire::GrimoireRecord,
     identity::Identity,
     legacy::{LegacyAction, LegacyDirective},
     memory::{MemoryEntry, MemoryGrant, MemoryProvenance, MemoryStatus},
@@ -21,7 +23,10 @@ struct CommonsReport {
     spell_contract_id: String,
     execution_id: String,
     memory_entry_id: String,
+    grimoire_record_id: String,
     legacy_directive_id: String,
+    export_bundle_id: String,
+    migration_root: String,
     allocations_minor: Vec<(String, u64)>,
 }
 
@@ -30,6 +35,9 @@ pub fn verify_commons() -> Result<()> {
     let creator = Identity::from_seed([82; 32]);
     let buyer = Identity::from_seed([83; 32]);
     let executor = Identity::from_seed([84; 32]);
+    let ratifier_a = Identity::from_seed([85; 32]);
+    let ratifier_b = Identity::from_seed([86; 32]);
+    let target_operator = Identity::from_seed([87; 32]);
 
     let hypothesis = ResearchRecord::issue(
         "commons-demo-research",
@@ -148,6 +156,24 @@ pub fn verify_commons() -> Result<()> {
         "Pensive memory provenance and least-privilege grant verified",
     );
 
+    let grimoire = GrimoireRecord::confirm(
+        "research-community",
+        execution.output_cid.clone(),
+        "88".repeat(32),
+        vec!["89".repeat(32)],
+        vec!["90".repeat(32)],
+        vec![researcher.member_id(), creator.member_id()],
+        None,
+        2,
+        &[&ratifier_a, &ratifier_b],
+        114,
+    )?;
+    grimoire.verify()?;
+    step(
+        8,
+        "Grimoire knowledge confirmed with rationale, exceptions, contributors and quorum",
+    );
+
     let legacy = LegacyDirective::new(
         execution.output_cid.clone(),
         LegacyAction::Transfer,
@@ -161,7 +187,7 @@ pub fn verify_commons() -> Result<()> {
         ],
     )?;
     legacy.authorize(150, &["guardian-a".into(), "guardian-b".into()])?;
-    step(8, "time-locked multi-guardian legacy directive verified");
+    step(9, "time-locked multi-guardian legacy directive verified");
 
     let allocations = manifest.allocations()?;
     ensure!(
@@ -169,8 +195,30 @@ pub fn verify_commons() -> Result<()> {
         "capability allocations do not conserve payment"
     );
     step(
-        9,
+        10,
         "payment allocation conserves value without creating votes",
+    );
+
+    let bundle = FederationBundle::export(
+        "research-community",
+        Some("successor-community".into()),
+        vec![
+            export_item("capability", &manifest.capability_id, &manifest.package_cid),
+            export_item("execution", &execution.execution_id, &execution.output_cid),
+            export_item("grimoire", &grimoire.record_id, &grimoire.knowledge_cid),
+            export_item("legacy", &legacy.directive_id, &legacy.subject_cid),
+            export_item("memory", &memory.entry_id, &memory.content_cid),
+            export_item("research", &analysis.record_id, &analysis.content_cid),
+        ],
+        151,
+        &researcher,
+    )?;
+    bundle.verify()?;
+    let migration = MigrationReceipt::issue(&bundle, "successor-community", 152, &target_operator)?;
+    migration.verify(&bundle)?;
+    step(
+        11,
+        "complete signed export imported by a replaceable successor community",
     );
 
     let report = CommonsReport {
@@ -184,21 +232,26 @@ pub fn verify_commons() -> Result<()> {
             "capability",
             "compute-to-data",
             "pensive",
+            "grimoire",
             "legacy",
             "allocation",
+            "federation-export",
         ],
         research_record_ids: vec![hypothesis.record_id, dataset.record_id, analysis.record_id],
         capability_id: manifest.capability_id,
         spell_contract_id: spell.contract_id,
         execution_id: execution.execution_id,
         memory_entry_id: memory.entry_id,
+        grimoire_record_id: grimoire.record_id,
         legacy_directive_id: legacy.directive_id,
+        export_bundle_id: bundle.bundle_id,
+        migration_root: migration.imported_root,
         allocations_minor: allocations,
     };
     let output = Path::new(".verify/verify-commons-report.json");
     fs::create_dir_all(output.parent().context("report path has no parent")?)?;
     fs::write(output, serde_json::to_vec_pretty(&report)?)?;
-    println!("verify:commons PASS — all 9 protocol steps succeeded");
+    println!("verify:commons PASS — all 11 protocol steps succeeded");
     println!("evidence={}", output.display());
     Ok(())
 }
@@ -208,6 +261,14 @@ fn split(recipient_id: &str, role: &str, basis_points: u16) -> RevenueSplit {
         recipient_id: recipient_id.into(),
         role: role.into(),
         basis_points,
+    }
+}
+
+fn export_item(category: &str, item_id: &str, content_cid: &str) -> ExportItem {
+    ExportItem {
+        category: category.into(),
+        item_id: item_id.into(),
+        content_cid: content_cid.into(),
     }
 }
 

@@ -6,6 +6,8 @@ pub mod catalog;
 pub mod compute;
 pub mod credit;
 pub mod crypto;
+pub mod federation;
+pub mod grimoire;
 pub mod identity;
 pub mod legacy;
 pub mod memory;
