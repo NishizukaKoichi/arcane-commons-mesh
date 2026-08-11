@@ -21,6 +21,17 @@ export type Vote = {
   memberSignature: string;
 };
 
+export type CommonsArtifact = {
+  artifactId: string;
+  communityId: string;
+  ownerMemberId: string;
+  kind: string;
+  envelopeCid: string;
+  encryptedEnvelopeBase64: string;
+  createdAt: number;
+  ownerSignature: string;
+};
+
 export interface AuthRepository {
   createChallenge(valueHash: string, now: number): Promise<Challenge>;
   getChallenge(id: string): Promise<Challenge | undefined>;
@@ -54,6 +65,7 @@ export class MemoryRepository implements AuthRepository {
   readonly votes = new Map<string, Map<string, Vote>>();
   readonly voteHistory: Array<Vote & { proposalId: string }> = [];
   readonly proposals = new Set<string>();
+  readonly commonsArtifacts = new Map<string, CommonsArtifact>();
 
   addMember(input: {
     memberId: string;

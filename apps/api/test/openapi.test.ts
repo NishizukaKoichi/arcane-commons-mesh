@@ -15,6 +15,7 @@ describe("OpenAPI negative capabilities", () => {
       "/v1/objects",
       "/v1/credits/me",
       "/v1/proposals/{proposalid}/vote",
+      "/v1/communities/{communityid}/commons-artifacts",
       "/v1/internal/audit-anchors/run"
     ]) {
       expect(specification).toContain(required);

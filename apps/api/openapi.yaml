@@ -111,6 +111,10 @@ paths:
     get: { operationId: listAuditEvents, parameters: [{$ref: "#/components/parameters/CommunityId"}], responses: { "200": { description: Events } } }
   /v1/communities/{communityId}/audit-anchors:
     get: { operationId: listAuditAnchors, parameters: [{$ref: "#/components/parameters/CommunityId"}], responses: { "200": { description: Anchors } } }
+  /v1/communities/{communityId}/commons-artifacts:
+    post: { operationId: publishCommonsArtifact, parameters: [{$ref: "#/components/parameters/CommunityId"}], responses: { "201": { description: Encrypted artifact published } } }
+  /v1/communities/{communityId}/commons-artifacts/{artifactId}:
+    get: { operationId: getCommonsArtifact, parameters: [{$ref: "#/components/parameters/CommunityId"}], responses: { "200": { description: Opaque artifact envelope } } }
   /v1/internal/audit-anchors/run:
     post:
       security:

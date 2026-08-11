@@ -93,6 +93,18 @@ export const catalogPointer = z.object({
   ownerSignature: z.string().min(80).max(128)
 });
 
+export const commonsArtifact = z.object({
+  artifactId: z.string().regex(/^(?:res|spl|cap|exe|memr|gri|leg|exp)_[0-9a-f]{64}$/),
+  kind: z.enum([
+    "research", "spell", "capability", "execution", "memory", "grimoire", "legacy",
+    "federation_export"
+  ]),
+  envelopeCid: cid,
+  encryptedEnvelopeBase64: z.string().min(1).max(400_000),
+  createdAt: z.number().int().nonnegative(),
+  ownerSignature: z.string().min(80).max(128)
+});
+
 export const proposal = z.object({
   proposalId: opaqueId,
   communityId: opaqueId,

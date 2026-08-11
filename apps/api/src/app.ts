@@ -5,6 +5,7 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import {
   catalogPointer,
   challengeSession,
+  commonsArtifact,
   community,
   heartbeat,
   joinRequest,
@@ -1368,6 +1369,100 @@ export function createApp(options: AppOptions = {}) {
       .bind(communityId)
       .all();
     return context.json({ communityId, anchors: rows.results });
+  });
+  app.post(
+    "/v1/communities/:communityId/commons-artifacts",
+    zValidator("json", commonsArtifact),
+    async (context) => {
+      const communityId = context.req.param("communityId");
+      const principal = context.get("principal");
+      const item = context.req.valid("json");
+      if (principal.communityId !== communityId) {
+        return context.json({ error: "wrong_community" }, 403);
+      }
+      if (item.createdAt > now()) return context.json({ error: "future_artifact" }, 400);
+      if (!decodeVerifiedCiphertext(item.encryptedEnvelopeBase64, item.envelopeCid)) {
+        return context.json({ error: "envelope_cid_mismatch" }, 400);
+      }
+      const message = [
+        "acm.commons-artifact.v1",
+        communityId,
+        item.artifactId,
+        item.kind,
+        item.envelopeCid,
+        item.createdAt
+      ].join("|");
+      if (!(await verifySignature(principal.publicKey, item.ownerSignature, message))) {
+        return context.json({ error: "invalid_artifact_signature" }, 401);
+      }
+      if (context.env?.DB) {
+        try {
+          const audit = await prepareAuditEvent(context.env.DB, {
+            communityId,
+            kind: "commons_artifact_published",
+            actorId: principal.memberId,
+            subjectId: item.artifactId,
+            occurredAt: item.createdAt
+          });
+          await context.env.DB.batch([
+            context.env.DB
+              .prepare(
+                `INSERT INTO commons_artifacts
+                 (artifact_id, community_id, owner_member_id, artifact_kind, envelope_cid,
+                  encrypted_envelope_base64, created_at, owner_signature)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+              )
+              .bind(
+                item.artifactId,
+                communityId,
+                principal.memberId,
+                item.kind,
+                item.envelopeCid,
+                item.encryptedEnvelopeBase64,
+                item.createdAt,
+                item.ownerSignature
+              ),
+            audit.statement
+          ]);
+        } catch {
+          return context.json({ error: "artifact_conflict" }, 409);
+        }
+      } else {
+        if (memoryRepository.commonsArtifacts.has(item.artifactId)) {
+          return context.json({ error: "artifact_conflict" }, 409);
+        }
+        memoryRepository.commonsArtifacts.set(item.artifactId, {
+          ...item,
+          communityId,
+          ownerMemberId: principal.memberId
+        });
+      }
+      return context.json({ artifactId: item.artifactId, envelopeCid: item.envelopeCid }, 201);
+    }
+  );
+  app.get("/v1/communities/:communityId/commons-artifacts/:artifactId", async (context) => {
+    const communityId = context.req.param("communityId");
+    if (context.get("principal").communityId !== communityId) {
+      return context.json({ error: "wrong_community" }, 403);
+    }
+    const artifactId = context.req.param("artifactId");
+    if (context.env?.DB) {
+      const row = await context.env.DB
+        .prepare(
+          `SELECT artifact_id AS artifactId, owner_member_id AS ownerMemberId,
+                  artifact_kind AS kind, envelope_cid AS envelopeCid,
+                  encrypted_envelope_base64 AS encryptedEnvelopeBase64,
+                  created_at AS createdAt, owner_signature AS ownerSignature
+           FROM commons_artifacts WHERE artifact_id = ? AND community_id = ?`
+        )
+        .bind(artifactId, communityId)
+        .first();
+      return row ? context.json(row) : context.json({ error: "not_found" }, 404);
+    }
+    const item = memoryRepository.commonsArtifacts.get(artifactId);
+    return item?.communityId === communityId
+      ? context.json(item)
+      : context.json({ error: "not_found" }, 404);
   });
   app.post("/v1/internal/audit-anchors/run", async (context) => {
     const expectedInternalSecret = internalSecret ?? context.env?.INTERNAL_SECRET;

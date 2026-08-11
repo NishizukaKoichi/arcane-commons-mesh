@@ -1,4 +1,6 @@
 import { generateKeyPairSync, sign, type KeyObject } from "node:crypto";
+import { blake3 } from "@noble/hashes/blake3.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
 import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app";
 import { auditMerkleRoot } from "../src/maintenance";
@@ -264,6 +266,59 @@ describe("control plane API", () => {
     });
     expect(response.status).toBe(401);
     expect(repository.voteHistory).toHaveLength(0);
+  });
+
+  it("persists only CID-bound encrypted Commons artifacts with owner signatures", async () => {
+    const repository = new MemoryRepository();
+    const { app } = createApp({ repository, now: () => 100 });
+    const { token, privateKey } = await login(app, repository);
+    const encryptedEnvelope = new TextEncoder().encode("opaque-encrypted-envelope");
+    const envelopeCid = bytesToHex(blake3(encryptedEnvelope));
+    const artifactId = `res_${"a".repeat(64)}`;
+    const message = [
+      "acm.commons-artifact.v1",
+      "community-a",
+      artifactId,
+      "research",
+      envelopeCid,
+      100
+    ].join("|");
+    const body = {
+      artifactId,
+      kind: "research",
+      envelopeCid,
+      encryptedEnvelopeBase64: toBase64Url(encryptedEnvelope),
+      createdAt: 100,
+      ownerSignature: toBase64Url(sign(null, Buffer.from(message), privateKey))
+    };
+    const created = await app.request("/v1/communities/community-a/commons-artifacts", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify(body)
+    });
+    expect(created.status).toBe(201);
+    expect(repository.commonsArtifacts.get(artifactId)).not.toHaveProperty("plaintext");
+
+    const fetched = await app.request(
+      `/v1/communities/community-a/commons-artifacts/${artifactId}`,
+      { headers: { authorization: `Bearer ${token}` } }
+    );
+    expect(fetched.status).toBe(200);
+    expect((await fetched.json<{ envelopeCid: string }>()).envelopeCid).toBe(envelopeCid);
+
+    const duplicate = await app.request("/v1/communities/community-a/commons-artifacts", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify(body)
+    });
+    expect(duplicate.status).toBe(409);
+
+    const mismatched = await app.request("/v1/communities/community-a/commons-artifacts", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ ...body, artifactId: `res_${"b".repeat(64)}`, envelopeCid: "0".repeat(64) })
+    });
+    expect(mismatched.status).toBe(400);
   });
 
   it("has no credit transfer, purchase, sale, exchange, or token routes", async () => {

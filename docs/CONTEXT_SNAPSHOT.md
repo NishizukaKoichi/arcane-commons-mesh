@@ -69,3 +69,10 @@ claim. Grimoire quorum confirmation and signed federation export/import are now
 implemented at the protocol layer. Persistent API/UI journeys, real payment
 adapters, real confidential-compute attestation, integrated Mesh storage, and
 end-to-end release verification remain required.
+
+The Worker/D1 boundary now accepts authenticated Commons artifacts as opaque,
+CID-bound encrypted envelopes with owner signatures. It rejects future-dated,
+cross-community, duplicate, CID-mismatched, and forged publications; coordinator
+storage receives neither plaintext nor decryption keys. Migration `0004` and
+OpenAPI routes make this persistence reproducible. Desktop authoring and the
+real confidential-compute/payment adapter boundaries remain next.
